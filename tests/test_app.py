@@ -104,21 +104,29 @@ def test_import_ui_rejects_doctype_nessus_upload_without_crashing() -> None:
 
 def test_blank_ollama_tag_shows_rule_plan_fallback_and_logs(tmp_path: Path, monkeypatch) -> None:
     from proofpath.schemas import ServiceObservation
+    from proofpath.ledger import Ledger
 
     config_path = tmp_path / "blank-ollama.yaml"
     config_path.write_text('base_url: "http://127.0.0.1:11434"\nmodel_tag: ""\n', encoding="utf-8")
     monkeypatch.setenv("PROOFPATH_OLLAMA_CONFIG", str(config_path))
+    data_root = tmp_path / "data"
+    monkeypatch.setenv("PROOFPATH_DATA_DIR", str(data_root))
+    evidence = Ledger(data_root / "evidence").store(content=b"synthetic open web service", tool="fixture", command=["fixture"], status="ok", summary="synthetic plan test", source_mode="imported")
 
-    audit_path = ROOT / "data" / "audit.jsonl"
+    audit_path = data_root / "audit.jsonl"
     initial_count = len(AuditLog(audit_path).read_entries())
     app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=20).run()
     app.session_state["observations"] = [ServiceObservation(
-        evidence_id="EV-TEST", ip="10.10.250.250", port=8443, protocol="tcp", state="open", service="https"
+        evidence_id=evidence.id, ip="10.10.250.250", port=8443, protocol="tcp", state="open", service="https", source_mode="imported"
     )]
     app.run()
     next(button for button in app.button if button.label == "Generate plan").click().run()
     warnings = "\n".join(item.value for item in app.warning)
-    assert "Proposer unavailable: rule-based plan shown" in warnings
+    assert "Proposer unavailable: deterministic top rule-ranked candidate shown" in warnings
+    plan_text = "\n".join([*(item.value for item in app.markdown), *(item.value for item in app.text), *(item.value for item in app.caption)])
+    assert "Decision trace (code generated)" in plan_text
+    assert "This action does not start a Burp scan." in plan_text
+    assert "Expected result: tool-reported web issues" in plan_text
     assert not app.exception
     recent = AuditLog(audit_path).read_entries()[initial_count:]
     assert any(entry.event_type == "proposer_unavailable" for entry in recent)

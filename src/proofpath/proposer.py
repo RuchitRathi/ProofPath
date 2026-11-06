@@ -261,7 +261,7 @@ def _messages(summary: str, candidates: list[PlannerCandidate]) -> list[dict[str
 def propose_and_gate(
     observations: list[ServiceObservation],
     candidates: list[PlannerCandidate],
-    client: ModelClient,
+    client: ModelClient | None,
     guard: ScopeGuard,
     audit: AuditLog,
     ledger: Ledger,
@@ -281,7 +281,10 @@ def propose_and_gate(
     schema["properties"]["candidate_id"]["enum"] = [item.candidate_id for item in candidates]
     proposal: ProposedAction | None = None
     validation_errors: list[str] = []
-    for attempt in (1, 2):
+    if client is None:
+        validation_errors.append("model client unavailable; using deterministic rule-ranked candidate")
+        audit.append("proposer_unavailable", actor, {"reason": validation_errors[-1]})
+    for attempt in (1, 2) if client is not None else ():
         try:
             raw = client.complete(messages, schema)
             if len(raw.encode("utf-8")) > _MAX_MODEL_RESPONSE:
