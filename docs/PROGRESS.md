@@ -2,7 +2,7 @@
 
 ## Current status
 
-Day 1 path includes typed scope checks, signed decisions, live nmap through Ubuntu WSL, recorded nmap XML import, raw evidence with SHA-256, audit hash chaining, and artifact verification. Day 2 adds guarded Nessus and Burp XML importers, deterministic normalization/correlation, a schema-constrained Ollama proposer, and the Findings/Plan/Imports UI. Ubuntu WSL Nmap 7.98 and Qwen2.5 7B Q4_K_M are installed. The proposer returns a candidate ID and rationale only; ProofPath constructs and scope-checks the selected action. Day 3 Steps 1–7 are implemented and acceptance checks pass; no external host was contacted.
+Day 1 path includes typed scope checks, signed decisions, Ubuntu WSL Nmap, recorded Nmap XML import, raw evidence with SHA-256, audit hash chaining, and artifact verification. Day 2 adds guarded Nessus and Burp XML importers, deterministic normalization/correlation, a schema-constrained Ollama proposer, and the Findings/Plan/Imports UI. Ubuntu WSL Nmap 7.98 and Qwen2.5 7B Q4_K_M are installed. The proposer returns a candidate ID and rationale only; ProofPath constructs and scope-checks the selected action. Day 3 Steps 1–7 and the Day 4 proof/documentation pass are complete. No public host was contacted.
 
 Correction pass complete: Burp accepts only a narrowly validated internal ELEMENT/ATTLIST DTD with all entity and external identifier mechanisms rejected. Nessus and nmap continue rejecting every DOCTYPE. Current runtime settings select Ubuntu WSL for nmap and Qwen2.5 7B Q4_K_M for Ollama; the blank-tag fallback AppTest uses a temporary config selected through `PROOFPATH_OLLAMA_CONFIG`.
 
@@ -49,6 +49,9 @@ Day 2 scope is complete. Day 3 scope is complete through the rule-based skeptic.
 - 2026-11-07: Five-run direct-Qwen vs ProofPath synthetic scorecard saved in `docs/SCORECARD.md`; baseline was faster and equally clean on mechanically detected fabrication but often omitted claims. ProofPath returned all 6 findings each run and selected C1, with 2/5 safe fallbacks. Audit reasons included unrelated/uncited evidence and Ollama timeouts.
 - 2026-11-07: Fallback correction based on audit: timeout raised 30s to 60s; Streamlit warms configured Qwen once per session; prompt now asks for one evidence ID from the selected candidate. Focused proposer/UI tests: 23 passed. Real warm-up passed. Repeated five-run scorecard: 0/5 fallbacks (two first attempts were rejected/retried: one timeout, one absent evidence ID), valid JSON 5/5, action candidate exact, mean 15.570s. The baseline remained faster at 2.300s and usually omitted extractable facts.
 - 2026-11-07: `samples_real/` is absent, so no real Nessus/Burp files were parsed. Integration matrix now states Burp DTD behavior accurately and describes the limited WSL loopback scan result.
+- 2026-11-07: Day 4 docs added: Windows setup, architecture, tool matrix, and a rehearsable synthetic demo. The sample PDF was regenerated from a clean disposable ledger and rendered to seven images for inspection; chart is legible, tables wrap without clipping, synthetic/imported labels are present, and prohibited compliance wording is absent. PDF SHA-256: `b0ace0a890078b8ec3d5bebee4a368b10598503db6a90792cc11cdabeb70ab18`.
+- 2026-11-07: Clean synthetic E2E: guarded imports -> findings/risk/proposer -> exact approved loopback GET (HTTP 200) -> replay denied -> PDF -> verify passed. Tampered PDF verification named `docs/sample_report.pdf`; tampered artifact verification named `EV-0001`. The sandbox blocked the first local-server attempt; elevated rerun passed. Host-only/Docker WSL routing remains unverified.
+- 2026-11-07: Final full pytest: 132 passed in 16.79s; final redteam: 69 passed, 0 failed. Both ran elevated because sandbox restrictions blocked loopback sockets/temp access. The initial sandboxed pytest run had four environment/docs failures; the compliance wording in demo docs was removed and the elevated final run passed.
 
 ## Next up
 
@@ -58,12 +61,11 @@ Day 2 scope is complete. Day 3 scope is complete through the rule-based skeptic.
 - Confirm the authorized lab CIDR and exclusions.
 - Provide real Nessus and Burp exports so parser variants can be checked against actual files.
 
-### Day 4 plan
+### Future work (outside completed Day 4 scope)
 
-- Build the baseline scorecard from the synthetic demo dataset.
-- Add verified setup/demo documentation and integration status.
-- Rehearse the demo and record a fallback using synthetic/imported data.
-- Consider ZAP only if time remains; keep it behind the scope guard and label its mode truthfully.
+- Verify host-only and Docker lab routing only after an authorized lab target is supplied.
+- Validate parser variants against actual Nessus and Burp exports.
+- Any future ZAP work requires a separate scoped implementation and review; it was not added in Day 4.
 
 ## Decision log
 
@@ -87,11 +89,13 @@ Day 2 scope is complete. Day 3 scope is complete through the rule-based skeptic.
 ## Known issues/bugs
 
 - The default allow range `10.10.0.0/16` is a placeholder lab, not confirmation that this network is the engagement.
-- Ubuntu WSL Nmap is installed and configured, but no live scan has been run. Confirm the lab CIDR and exclusions before scanning.
+- Ubuntu WSL Nmap 7.98 is installed and configured with `-sT`; a WSL loopback scan returned a closed port. Host-only and Docker lab routing remain unverified. Confirm the lab CIDR and exclusions before scanning.
 - The HMAC key changes when the Streamlit process reloads. That does not weaken the on-disk audit chain.
 - The Nessus fixture is synthetic and plugin ID/CVE placeholders are not authoritative; verify exact details against a real Nessus export. The Burp fixtures are synthetic; exact current export variants need a real sample.
 
 ## Test status
 
-2026-11-06: Proposer final suite `python -m pytest -q` — 130 passed in 11.40s; redteam — 69 passed, 0 failed. Proposer-focused and UI tests — 15 passed. Qwen measurement: live evidence 10/10 valid JSON, 2 deterministic fallbacks, 11.560s average; imported evidence 10/10, 1 fallback, 9.574s; no web candidate had no calls and no fallback. Both candidate cases selected C1 and built the exact candidate action in 10/10 runs. Risk top score changed from 80.0 live to 74.0 imported. Real plugin_output injection text was absent from prompt; model selected C1 and guard allowed only the code-built scoped action. One real call diagnostic had a first request timeout (configured 30s); retry succeeded. Redteam and test runs used elevated loopback/temp access.
+2026-11-07: After Qwen timeout/prompt correction, five-run synthetic comparison: `python scripts/baseline_vs_proofpath.py`; direct baseline valid JSON 5/5, 0 fabricated claims, 2.300s mean; ProofPath 5/5, 0 fabricated claims, 6/6 findings each run, 0/5 final fallbacks, 15.570s mean, C1 each run. Two first responses were rejected and successfully retried (one timeout, one invalid evidence ID). This is a small synthetic comparison, not a general quality benchmark. Earlier 10-run proposer-correction measurements remain recorded above.
+- 2026-11-07: Model warm-up request passed. `ollama.yaml` selects `qwen2.5:7b-instruct-q4_K_M`, request timeout is 60 seconds, and Streamlit warms the model once per session. Local execution removes hosted network delay but does not guarantee low token-generation latency; hardware-specific CPU/GPU utilization was not measured.
+- 2026-11-07: Final Day 4 acceptance: `python -m pytest -q` — 132 passed in 16.79s; `python -m proofpath.cli redteam --scope scope.yaml` — 69 passed, 0 failed. Clean synthetic E2E approval/execute/replay, PDF generation, and `proofpath verify` passed; tamper checks named the report path and EV-0001. WSL lab network access and real Nessus/Burp export variants remain unverified.
 

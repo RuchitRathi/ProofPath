@@ -61,7 +61,7 @@ Tool output is stored as bytes and displayed as parsed fields. The optional prop
 
 A signed decision carries an HMAC. The key lives on the `ScopeGuard` instance. Flipping `allowed` after `check` fails `verify_decision`, and an adapter will not start. `active_validate` also needs an approved, unexpired, unused `ApprovalRequest` whose hash matches its exact target/port/method/path/finding binding.
 
-Planned adapter modules (`nikto`, `zap`) raise if called. Nessus and Burp XML import functions are available programmatically and in the Streamlit Imports tab.
+Planned adapter modules (`nikto`, `zap`) raise if called. Nessus and Burp XML import functions are available programmatically and in the Streamlit Imports tab. WSL Nmap was run only against WSL loopback; this does not verify host-only or Docker lab routing.
 
 The optional proposer selects a stable candidate ID from the current rule-generated candidate set. Ollama receives a JSON schema whose candidate_id is an enum of those IDs and returns only candidate_id plus rationale (observed, inferred, why). ProofPath constructs the Action from that candidate; model output cannot supply or alter target, ports, tool, arguments, engagement, or requester. Invalid JSON, an out-of-set ID, or invalid/relevant-evidence citations are retried once, then the top rule-ranked candidate is selected and audited. The built Action still passes through `scope_guard.check` and is queued for analyst review; the proposer never launches a tool itself. Candidate prompt facts include exposure state and supporting evidence ID.
 
@@ -108,7 +108,7 @@ A finding contains `id`, `title`, `asset` (`ip`, optional `hostname`), `port`, `
 
 1. Every tool execution goes through `scope_guard.check(action)` inside `execute_action`. The guard accepts a typed `Action`.
 2. Processes are started with argument lists. `shell=True` is not used. Nmap flags are chosen by `build_argv`, not by free text.
-3. The model may only emit `Action` values. Tool bytes stay in the ledger. The UI renders parsed fields as a table.
+3. The model may only emit a candidate ID and rationale from the constrained proposer schema; code builds the typed `Action`. Tool bytes stay in the ledger. The UI renders parsed fields as a table.
 4. The parser does not create CVEs, CVSS scores, or hosts that were absent from the XML. A missing CVSS stays null and displays as `not provided`.
 5. Every `ServiceObservation` cites an evidence ID and XPath locator. Each `Finding.evidence` item is an `EvidenceRef`; `observed` and labeled `inference` remain separate. Nessus and Burp imports create findings; nmap service observations alone do not.
 6. `ActionName.ACTIVE_VALIDATE` is denied unless an exact approved, unused, unexpired approval is supplied. Existing scope and allowlisted-path checks still apply.
@@ -136,7 +136,7 @@ Status is what the code can do today.
 
 Recorded nmap XML, Nessus `.nessus` XML, and safely constrained Burp issue XML are available as labeled import paths. OpenVAS remains planned. The current live nmap runtime is Ubuntu WSL, selected by `nmap.yaml`.
 
-The same rows live in `src/proofpath/integrations.py`. A test checks that every tool and status appear in this table. Nessus and Burp import routes are available both programmatically and in the Streamlit Imports tab. Their fixture formats are synthetic; Burp accepts only a verified internal ELEMENT/ATTLIST subset and rejects entity declarations/references and external identifiers.
+The same rows live in `src/proofpath/integrations.py` and `docs/INTEGRATION_MATRIX.md`. A test checks that every tool and status appear in this table. Nessus and Burp import routes are available both programmatically and in the Streamlit Imports tab. Their fixture formats are synthetic; Burp accepts only a verified internal ELEMENT/ATTLIST subset and rejects entity declarations/references and external identifiers.
 
 ## 8. Security boundaries and threat model
 
@@ -187,7 +187,7 @@ After at least one UI action or test has created a log:
 
 `verify` checks the chain, evidence artifacts, report files and citations, and approval action references. `proofpath ground-check` checks findings saved for the current report against the ledger; unsupported CVE/CWE, IP, port, product/version, or evidence-ID claims are audited and return a non-zero result. IP grounding canonicalizes IPv4 and IPv6 literals so an IPv6 address suffix cannot be mistaken for a port. PDF source labeling detects a `SYNTHETIC` marker in stored artifact bytes as well as ledger summaries.
 
-`python -m proofpath.cli demo-load --scope scope.demo.yaml --data data/demo` imports the labeled synthetic Nmap XML, Nessus XML, and Burp XML through the normal scope-guarded import paths, then prints findings, risk ranks, proposer candidates, and the chosen plan. `scope.demo.yaml` is separate from the default scope and excludes `10.20.0.250` inside the demo CIDR to exercise a dropped-host audit.
+`python -m proofpath.cli demo-load --scope scope.demo.yaml --data data/demo` imports the labeled synthetic Nmap XML, Nessus XML, and Burp XML through the normal scope-guarded import paths, then prints findings, risk ranks, proposer candidates, and the chosen plan. `scope.demo.yaml` is separate from the default scope and excludes `10.20.0.250` inside the demo CIDR to exercise a dropped-host audit. `docs/DEMO_SCRIPT.md` describes the rehearsal. `docs/sample_report.pdf` is generated from the synthetic evidence and is not a client report.
 
 `python scripts/baseline_vs_proofpath.py` runs the five-run synthetic comparison recorded in `docs/SCORECARD.md`. It is a small synthetic benchmark; its free-text baseline cannot measure structured finding drops or merges.
 
