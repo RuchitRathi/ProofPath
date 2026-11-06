@@ -185,7 +185,7 @@ After at least one UI action or test has created a log:
 .venv\Scripts\python -m proofpath.cli verify --audit data\audit.jsonl --ledger data\evidence
 ```
 
-`verify` checks the chain, evidence artifacts, report files and citations, and approval action references. `proofpath ground-check` checks findings saved for the current report against the ledger; unsupported CVE/CWE, IP, port, product/version, or evidence-ID claims are audited and return a non-zero result. IP grounding canonicalizes IPv4 and IPv6 literals so an IPv6 address suffix cannot be mistaken for a port.
+`verify` checks the chain, evidence artifacts, report files and citations, and approval action references. `proofpath ground-check` checks findings saved for the current report against the ledger; unsupported CVE/CWE, IP, port, product/version, or evidence-ID claims are audited and return a non-zero result. IP grounding canonicalizes IPv4 and IPv6 literals so an IPv6 address suffix cannot be mistaken for a port. PDF source labeling detects a `SYNTHETIC` marker in stored artifact bytes as well as ledger summaries.
 
 `python -m proofpath.cli demo-load --scope scope.demo.yaml --data data/demo` imports the labeled synthetic Nmap XML, Nessus XML, and Burp XML through the normal scope-guarded import paths, then prints findings, risk ranks, proposer candidates, and the chosen plan. `scope.demo.yaml` is separate from the default scope and excludes `10.20.0.250` inside the demo CIDR to exercise a dropped-host audit.
 

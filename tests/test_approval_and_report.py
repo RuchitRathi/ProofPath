@@ -155,6 +155,7 @@ def test_report_sections_evidence_trace_import_label_and_hash(tmp_path: Path) ->
     assert positions == sorted(positions)
     assert ev.id in text and "/ReportItem[1]" in text and "port=\"80\"" in text
     assert "imported, not live-executed" in text
+    assert "This report uses synthetic data." in text
     assert "not provided" in text
     assert "compliant with" not in text.casefold()
     entry = next(item for item in audit.read_entries() if item.event_type == "report_generated")

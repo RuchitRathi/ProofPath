@@ -59,7 +59,11 @@ def generate_pdf(
     failures = [entry for entry in entries_before if entry.event_type in {"tool_error", "nmap_result"} and entry.details.get("status") in {"error", "timeout", "tool_not_found"}]
     approvals = [entry for entry in entries_before if entry.event_type in {"approval_requested", "approval_decision", "active_validation_outcome"}]
     imported = any(item.source_mode == "imported" for item in evidence_records.values())
-    synthetic = any("synthetic" in item.summary.casefold() for item in evidence_records.values())
+    synthetic = any(
+        "synthetic" in item.summary.casefold()
+        or b"synthetic" in ledger.read_bytes(item.id).lower()
+        for item in evidence_records.values()
+    )
 
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(name="Small", parent=styles["BodyText"], fontSize=7, leading=9, wordWrap="CJK"))
