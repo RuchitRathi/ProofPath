@@ -30,9 +30,9 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 class Rationale(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    observed: list[str] = Field(min_length=1)
-    inferred: str
-    why: str
+    observed: list[str] = Field(min_length=1, max_length=2)
+    inferred: str = Field(max_length=180)
+    why: str = Field(max_length=180)
 
 
 class ProposedAction(BaseModel):
@@ -55,6 +55,8 @@ class OllamaConfig(BaseModel):
     base_url: str = "http://127.0.0.1:11434"
     model_tag: str = ""
     timeout_seconds: int = Field(ge=1, le=300, default=30)
+    keep_alive: str | int = "30m"
+    num_predict: int = Field(ge=32, le=1024, default=96)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "OllamaConfig":
@@ -71,6 +73,8 @@ class OllamaClient:
 
     def __init__(self, config: OllamaConfig) -> None:
         self.config = config
+        self.last_metrics: dict[str, Any] = {}
+        self.metrics_history: list[dict[str, Any]] = []
         if not config.model_tag.strip():
             raise ValueError("Ollama model_tag is empty; set it in ollama.yaml after confirming the installed tag")
 
@@ -82,6 +86,8 @@ class OllamaClient:
             "messages": messages,
             "stream": False,
             "format": schema,
+            "keep_alive": self.config.keep_alive,
+            "options": {"num_predict": self.config.num_predict, "temperature": 0.1},
         }
         request = Request(
             self.config.base_url.rstrip("/") + "/api/chat",
@@ -100,6 +106,18 @@ class OllamaClient:
         content = outer.get("message", {}).get("content")
         if not isinstance(content, str):
             raise ValueError("Ollama response had no message.content string")
+        eval_duration = int(outer.get("eval_duration") or 0)
+        self.last_metrics = {
+            "model": self.config.model_tag,
+            "load_ms": round(int(outer.get("load_duration") or 0) / 1_000_000, 1),
+            "prompt_tokens": int(outer.get("prompt_eval_count") or 0),
+            "prompt_ms": round(int(outer.get("prompt_eval_duration") or 0) / 1_000_000, 1),
+            "output_tokens": int(outer.get("eval_count") or 0),
+            "generation_ms": round(eval_duration / 1_000_000, 1),
+            "tokens_per_second": round(int(outer.get("eval_count") or 0) * 1_000_000_000 / eval_duration, 2) if eval_duration > 0 else None,
+            "total_ms": round(int(outer.get("total_duration") or 0) / 1_000_000, 1),
+        }
+        self.metrics_history.append(dict(self.last_metrics))
         return content
 
     def warmup(self) -> None:
@@ -251,7 +269,8 @@ def _messages(summary: str, candidates: list[PlannerCandidate]) -> list[dict[str
     user = (
         "Select one candidate_id and provide a short rationale. Every rationale.observed item "
         "must cite exactly one evidence ID listed for the selected candidate and no other ID. "
-        "Do not infer or restate IDs from findings or other candidates.\n"
+        "Use exactly one observed item. Keep inferred and why to one concise sentence each, "
+        "at most 16 words. Do not repeat evidence IDs or restate other candidates.\n"
         "UNTRUSTED_SCANNER_DATA_BEGIN\n" + summary + "\nUNTRUSTED_SCANNER_DATA_END\n"
         "CANDIDATES_JSON:\n" + json.dumps([{"candidate_id": c.candidate_id, "target": c.action.target, "port": c.action.ports[0], "exposure_state": c.exposure_state, "exposure_evidence_id": c.exposure_evidence_id, "evidence_ids": c.observed_evidence_ids, "planner_reason": c.planner_reason} for c in candidates], ensure_ascii=True)
     )
@@ -287,6 +306,9 @@ def propose_and_gate(
     for attempt in (1, 2) if client is not None else ():
         try:
             raw = client.complete(messages, schema)
+            metrics = getattr(client, "last_metrics", None)
+            if metrics:
+                audit.append("model_call_metrics", actor, {"attempt": attempt, **metrics})
             if len(raw.encode("utf-8")) > _MAX_MODEL_RESPONSE:
                 raise ValueError("model output exceeded 1 MB")
             selected = CandidateSelection.model_validate_json(raw)

@@ -106,6 +106,9 @@ def test_rule_planner_skips_executed_fingerprint() -> None:
 def test_ollama_client_fails_clearly_when_model_tag_unconfirmed() -> None:
     with pytest.raises(ValueError, match="model_tag is empty"):
         OllamaClient(OllamaConfig())
+    configured = OllamaConfig(model_tag="qwen:test")
+    assert configured.keep_alive == "30m"
+    assert configured.num_predict == 96
 
 
 def test_ollama_warmup_requires_readiness_json(monkeypatch) -> None:
@@ -118,6 +121,43 @@ def test_ollama_warmup_requires_readiness_json(monkeypatch) -> None:
     monkeypatch.setattr(client, "complete", fake_complete)
     client.warmup()
     assert observed["schema"]["required"] == ["ready"]
+
+
+def test_ollama_request_keeps_model_warm_caps_tokens_and_records_timings(monkeypatch) -> None:
+    client = OllamaClient(OllamaConfig(model_tag="qwen:test", keep_alive="30m", num_predict=128))
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return json.dumps({
+                "message": {"content": '{"ready":true}'},
+                "load_duration": 100_000_000,
+                "prompt_eval_count": 40,
+                "prompt_eval_duration": 200_000_000,
+                "eval_count": 20,
+                "eval_duration": 400_000_000,
+                "total_duration": 750_000_000,
+            }).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = json.loads(request.data)
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("proofpath.proposer.urlopen", fake_urlopen)
+    assert client.complete([{"role": "user", "content": "hello"}], {"type": "object"}) == '{"ready":true}'
+    assert captured["request"]["keep_alive"] == "30m"
+    assert captured["request"]["options"]["num_predict"] == 128
+    assert client.last_metrics["load_ms"] == 100.0
+    assert client.last_metrics["prompt_ms"] == 200.0
+    assert client.last_metrics["generation_ms"] == 400.0
+    assert client.last_metrics["tokens_per_second"] == 50.0
 
 
 def test_proposal_without_evidence_ids_is_rejected_and_falls_back(tmp_path: Path) -> None:

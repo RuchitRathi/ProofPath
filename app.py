@@ -169,6 +169,8 @@ if "plan_proposal" not in st.session_state:
     st.session_state.plan_proposal = None
 if "plan_status" not in st.session_state:
     st.session_state.plan_status = ""
+if "plan_metrics" not in st.session_state:
+    st.session_state.plan_metrics = []
 if "criticality_by_asset" not in st.session_state:
     st.session_state.criticality_by_asset = {}
 if "approval_records" not in st.session_state:
@@ -292,6 +294,7 @@ with tabs[2]:
             try:
                 configured = OllamaConfig.from_yaml(OLLAMA_CONFIG_PATH)
                 client = OllamaClient(configured)
+                metrics_start = len(client.metrics_history)
                 proposal, result, used_fallback = propose_and_gate(
                     st.session_state.observations,
                     candidates,
@@ -305,6 +308,7 @@ with tabs[2]:
                 st.session_state.plan_status = result.status if result else ""
                 st.session_state.plan_candidate_count = len(candidates)
                 st.session_state.plan_fallback = used_fallback
+                st.session_state.plan_metrics = client.metrics_history[metrics_start:]
                 if used_fallback:
                     st.warning("Proposer unavailable: rule-based plan shown")
             except Exception as exc:
@@ -323,6 +327,7 @@ with tabs[2]:
                     st.session_state.plan_status = result.status if result else ""
                     st.session_state.plan_candidate_count = len(candidates)
                     st.session_state.plan_fallback = used_fallback
+                    st.session_state.plan_metrics = []
                     st.warning("Proposer unavailable: deterministic top rule-ranked candidate shown")
                     st.caption(str(exc))
                 except Exception as fallback_exc:
@@ -363,6 +368,9 @@ with tabs[2]:
             _audit_grounding_rejection(f"action:{proposal.action.id}:{hash(model_claims)}", {"action_id": proposal.action.id, "evidence_ids": cited_ids, "violations": list(grounding.violations), "fallback": "rule plan only; model inference hidden"})
             st.warning("Model rationale rejected by grounding verifier: " + "; ".join(grounding.violations))
         st.write("Gate status: " + ("rule fallback" if st.session_state.plan_fallback else st.session_state.plan_status))
+        for call_number, metrics in enumerate(st.session_state.plan_metrics, 1):
+            rate = f"{metrics['tokens_per_second']} tokens/s" if metrics.get("tokens_per_second") is not None else "generation rate unavailable"
+            st.caption(f"Ollama call {call_number}: load {metrics['load_ms']} ms · prompt {metrics['prompt_ms']} ms/{metrics['prompt_tokens']} tokens · generation {metrics['generation_ms']} ms/{metrics['output_tokens']} tokens ({rate}) · total {metrics['total_ms']} ms")
         if st.session_state.plan_status == "planned":
             left, right = st.columns(2)
             if left.button("Approve plan", key="approve_plan"):
