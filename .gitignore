@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.pytest-tmp/
+.pytest-tmp*/
+pytest-tmp*/
+pytest-of-RuchitRathi/
+samples_real/
+*.pyc
+*.egg-info/
+.streamlit/
+data/
+*.nmap
+*.gnmap
+*.scan
+scan-artifacts/

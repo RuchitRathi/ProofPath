@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC Burp-style export with a safe internal DTD; not a real export. -->
+<!DOCTYPE issues [
+  <!ELEMENT issues (issue*)>
+  <!ATTLIST issues burpVersion CDATA #IMPLIED>
+  <!ELEMENT issue (name,host,path,location,severity,confidence,issueBackground?,issueDetail?,remediationDetail?,request?,response?)>
+  <!ELEMENT name (#PCDATA)>
+  <!ELEMENT host (#PCDATA)>
+  <!ATTLIST host ip CDATA #IMPLIED>
+  <!ELEMENT path (#PCDATA)>
+  <!ELEMENT location (#PCDATA)>
+  <!ELEMENT severity (#PCDATA)>
+  <!ELEMENT confidence (#PCDATA)>
+  <!ELEMENT issueBackground (#PCDATA)>
+  <!ELEMENT issueDetail (#PCDATA)>
+  <!ELEMENT remediationDetail (#PCDATA)>
+  <!ELEMENT request (#PCDATA)>
+  <!ATTLIST request base64 (true|false) #IMPLIED>
+  <!ELEMENT response (#PCDATA)>
+  <!ATTLIST response base64 (true|false) #IMPLIED>
+]>
+<issues burpVersion="SYNTHETIC">
+  <issue>
+    <name>Synthetic internal-DTD issue</name>
+    <host ip="10.10.1.5">https://10.10.1.5:443</host>
+    <path>/synthetic</path>
+    <location>query parameter: q</location>
+    <severity>Information</severity>
+    <confidence>Certain</confidence>
+    <issueDetail>SYNTHETIC DTD-bearing issue data.</issueDetail>
+    <request base64="true">U1lOVEhFVElD</request>
+    <response base64="true">U1lOVEhFVElD</response>
+  </issue>
+</issues>

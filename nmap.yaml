@@ -1,0 +1,3 @@
+# Live nmap runs through WSL to use the Ubuntu installation.
+runtime: wsl
+distribution: Ubuntu

@@ -1,0 +1,4 @@
+# Qwen2.5 7B instruction model, Q4_K_M quantization.
+base_url: http://127.0.0.1:11434
+model_tag: "qwen2.5:7b-instruct-q4_K_M"
+timeout_seconds: 30

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap" args="nmap -sV -p 80,443 10.10.1.5" start="1700000000" version="7.94">
+  <host>
+    <status state="up" reason="echo-reply"/>
+    <address addr="10.10.1.5" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80">
+        <state state="open" reason="syn-ack"/>
+        <service name="http" product="nginx" version="1.25.0" method="probed"/>
+      </port>
+      <port protocol="tcp" portid="443">
+        <state state="closed" reason="conn-refused"/>
+      </port>
+    </ports>
+  </host>
+  <runstats>
+    <finished time="1700000001" exit="success"/>
+  </runstats>
+</nmaprun>

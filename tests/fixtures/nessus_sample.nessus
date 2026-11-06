@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC fixture only. Values do not describe a real host or authoritative plugin. -->
+<NessusClientData_v2>
+  <Report name="Synthetic ProofPath fixture">
+    <ReportHost name="10.10.1.5">
+      <HostProperties>
+        <tag name="host-ip">10.10.1.5</tag>
+        <tag name="HOST_START">2026/11/03 00:00:00</tag>
+      </HostProperties>
+      <ReportItem port="443" svc_name="https" protocol="tcp" severity="2" pluginID="SYNTHETIC-PLUGIN-001" pluginName="Synthetic sample issue" pluginFamily="Synthetic">
+        <description>SYNTHETIC description; not scanner output.</description>
+        <plugin_output>SYNTHETIC plugin output; not scanner output.</plugin_output>
+        <cvss_base_score>4.2</cvss_base_score>
+        <cvss_vector>CVSS2#AV:N/AC:H/Au:N/C:P/I:N/A:N</cvss_vector>
+        <cve>CVE-2099-900001</cve>
+        <cwe>CWE-79</cwe>
+      </ReportItem>
+    </ReportHost>
+  </Report>
+</NessusClientData_v2>

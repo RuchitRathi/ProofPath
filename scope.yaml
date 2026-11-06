@@ -1,0 +1,48 @@
+# Authorization boundary for the lab engagement.
+# The engagement lead edits this file. The UI cannot widen it.
+engagement: lab-01
+allowed_cidrs:
+  - 10.10.0.0/16
+# Docker Desktop self-hosted lab example (explicit opt-in only):
+# allow_loopback: true
+# allowed_cidrs: [127.0.0.1/32]
+# allowed_ports: ["8080", "8443"]  # only the published container ports
+excluded_cidrs: []
+excluded_hosts:
+  - 10.10.0.1
+allowed_ports:
+  - "22"
+  - "80"
+  - "443"
+  - "8080"
+  - "8443"
+allow_loopback: false
+# Self-hosted Docker lab example: allow_loopback: true plus 127.0.0.1/32 and
+# explicitly authorized container ports. This example is intentionally disabled.
+rate_limits:
+  max_timing: 3
+  max_host_timeout_seconds: 120
+enabled_actions:
+  - nmap_scan
+  - import_nmap_xml
+  - import_nessus
+  - import_burp
+  - active_validate
+allowed_validation_paths:
+  - /
+tool_arguments:
+  nmap:
+    service_detection:
+      type: bool
+    skip_host_discovery:
+      type: bool
+    timing:
+      type: int
+      minimum: 0
+      maximum: 3
+    host_timeout_seconds:
+      type: int
+      minimum: 1
+      maximum: 120
+  nessus: {}
+  burp: {}

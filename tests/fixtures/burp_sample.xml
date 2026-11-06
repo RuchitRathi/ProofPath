@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC Burp-shaped fixture only; not an actual scanner report. No DTD by design. -->
+<issues burpVersion="SYNTHETIC" exportTime="2026-11-03T00:00:00Z">
+  <issue>
+    <serialNumber>999999999</serialNumber>
+    <type>999</type>
+    <name>Synthetic reflected input issue</name>
+    <host>https://10.10.1.5:443</host>
+    <path>/synthetic</path>
+    <location>query parameter: sample</location>
+    <severity>High</severity>
+    <confidence>Certain</confidence>
+    <issueBackground>SYNTHETIC issue background; not scanner output.</issueBackground>
+    <issueDetail>SYNTHETIC issue detail; not scanner output.</issueDetail>
+    <remediationDetail>SYNTHETIC remediation; not scanner output.</remediationDetail>
+    <requestresponse>
+      <request base64="true">U1lOVEhFVElDIFJFUVVFU1Q=</request>
+      <response base64="true">U1lOVEhFVElDIFJFU1BPTlNF</response>
+    </requestresponse>
+  </issue>
+</issues>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC DTD-free seeded Burp conflict fixture; not an actual scanner report. -->
+<issues>
+  <issue><serialNumber>900001</serialNumber><type>999</type><name>SYNTHETIC shared issue</name><host>http://10.10.1.5:80</host><path>/one</path><location>sample</location><severity>High</severity><confidence>Firm</confidence><issueDetail>Synthetic shared issue; CVE-2099-900001 CWE-79.</issueDetail></issue>
+  <issue><serialNumber>900002</serialNumber><type>998</type><name>SYNTHETIC shared issue</name><host>http://10.10.1.6:80</host><path>/two</path><location>sample</location><severity>Low</severity><confidence>Tentative</confidence><issueDetail>Synthetic conflicting severity; CVE-2099-900001 CWE-79.</issueDetail></issue>
+</issues>

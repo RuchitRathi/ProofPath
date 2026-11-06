@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC seeded conflict fixture; imported test evidence, not a live scan. -->
+<nmaprun scanner="nmap" args="SYNTHETIC fixture">
+  <host>
+    <status state="up" reason="synthetic"/>
+    <address addr="10.10.1.5" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80"><state state="open" reason="synthetic"/><service name="http"/></port>
+      <port protocol="tcp" portid="443"><state state="closed" reason="synthetic"/></port>
+    </ports>
+  </host>
+</nmaprun>
