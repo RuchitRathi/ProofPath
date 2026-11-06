@@ -108,6 +108,18 @@ def test_ollama_client_fails_clearly_when_model_tag_unconfirmed() -> None:
         OllamaClient(OllamaConfig())
 
 
+def test_ollama_warmup_requires_readiness_json(monkeypatch) -> None:
+    client = OllamaClient(OllamaConfig(model_tag="qwen:test"))
+    observed = {}
+    def fake_complete(messages, schema):
+        observed["messages"] = messages
+        observed["schema"] = schema
+        return '{"ready":true}'
+    monkeypatch.setattr(client, "complete", fake_complete)
+    client.warmup()
+    assert observed["schema"]["required"] == ["ready"]
+
+
 def test_proposal_without_evidence_ids_is_rejected_and_falls_back(tmp_path: Path) -> None:
     guard = _guard()
     invalid = _proposal("C1", ["No source citation."])
@@ -182,6 +194,9 @@ def test_candidate_enum_is_dynamic_and_built_action_exactly_matches_candidate(tm
     stub = StubClient([_proposal(candidates[0].candidate_id, ["EV-0001 cites the parsed port fact."])])
     proposal, result, fallback = propose_and_gate(observations, candidates, stub, guard, audit, ledger)
     assert stub.calls[0][1]["properties"]["candidate_id"]["enum"] == [c.candidate_id for c in candidates]
+    assert set(stub.calls[0][1]["properties"]) == {"candidate_id", "rationale"}
+    assert "exposure_state" in stub.calls[0][0][1]["content"]
+    assert "exposure_evidence_id" in stub.calls[0][0][1]["content"]
     assert proposal and result and not fallback and result.status == "planned"
     assert proposal.action.model_dump(mode="json") == candidates[0].action.model_dump(mode="json")
 

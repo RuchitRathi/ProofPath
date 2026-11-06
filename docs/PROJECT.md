@@ -191,7 +191,7 @@ After at least one UI action or test has created a log:
 
 `python scripts/baseline_vs_proofpath.py` runs the five-run synthetic comparison recorded in `docs/SCORECARD.md`. It is a small synthetic benchmark; its free-text baseline cannot measure structured finding drops or merges.
 
-`ollama.yaml` configures `qwen2.5:7b-instruct-q4_K_M`. Run `python scripts/check_ollama.py` to report reachability, list local tags through Ollama's API, report configured-tag presence, and make a schema-constrained proposer response check; the check uses only a labeled synthetic fixture. The tag is listed by the [official Ollama model library](https://ollama.com/library/qwen2.5%3A7b-instruct-q4_K_M) at about 4.7 GB. Set `PROOFPATH_OLLAMA_CONFIG` to a different YAML file to test the blank-tag fallback.
+`ollama.yaml` configures `qwen2.5:7b-instruct-q4_K_M` with a 60-second request timeout. Streamlit warms the model once per session with a tiny JSON readiness response; warm-up failure is audited and does not authorize or execute an action. Run `python scripts/check_ollama.py` to report reachability, list local tags through Ollama's API, report configured-tag presence, and make a schema-constrained proposer response check; the check uses only a labeled synthetic fixture. The tag is listed by the [official Ollama model library](https://ollama.com/library/qwen2.5%3A7b-instruct-q4_K_M) at about 4.7 GB. Set `PROOFPATH_OLLAMA_CONFIG` to a different YAML file to test the blank-tag fallback.
 
 Default scope file: engagement `lab-01`, allowed `10.10.0.0/16`, excluded host `10.10.0.1`, ports 22, 80, 443, 8080, 8443. Timing is capped at 3. Host timeout is capped at 120 seconds. The UI sends timing 2 and a 60 second host timeout.
 

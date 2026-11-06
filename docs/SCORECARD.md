@@ -22,3 +22,19 @@ The baseline did as well or better on JSON validity and detected fabricated clai
 Fallback audit reasons included candidate-irrelevant evidence citations, evidence IDs absent from the ledger, and Ollama request timeouts. The harness records those rejection events; the two fallback runs included timeout and citation rejection cases. This result motivated the Day 4 timeout and prompt follow-up.
 
 The mechanical claim check compares identifiers and addresses against the fixture inputs, ports against fixture ports, and evidence IDs against the labeled parsed baseline text / active ledger. It does not judge the semantic quality of prose or whether a summary is complete.
+
+## Repeat after proposer timeout/prompt correction
+
+Date: 2026-11-07. Exact command: `python scripts/baseline_vs_proofpath.py`. A real warm-up was run immediately before the harness. The harness remained five runs per method.
+
+| Metric | Direct Qwen baseline | ProofPath |
+|---|---:|---:|
+| Valid JSON | 5/5 (100%) | 5/5 (100%) |
+| Mechanically detected fabricated claims | 0 | 0 |
+| Findings dropped/incorrectly merged | Not measurable from free text | 0; 6 each run |
+| Model calls | 5 | 5 |
+| Average wall time | 2.300 s | 15.570 s |
+| Final safe fallbacks | N/A | 0/5 |
+| Candidate selected | N/A | C1 in every run |
+
+ProofPath retried two rejected first responses (one timeout, one citation ID absent from the ledger); both retries recovered without fallback. The baseline was still faster and often returned no extractable claims. These five-run observations are not a general benchmark.

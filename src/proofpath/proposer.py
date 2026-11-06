@@ -102,6 +102,13 @@ class OllamaClient:
             raise ValueError("Ollama response had no message.content string")
         return content
 
+    def warmup(self) -> None:
+        """Load the configured model with a tiny schema-constrained readiness response."""
+        schema = {"type": "object", "properties": {"ready": {"type": "boolean"}}, "required": ["ready"], "additionalProperties": False}
+        response = json.loads(self.complete([{"role": "user", "content": 'Return exactly {"ready":true}.'}], schema))
+        if response != {"ready": True}:
+            raise ValueError("Ollama warm-up response was not the expected readiness object")
+
 
 class PlannerCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -243,7 +250,8 @@ def _messages(summary: str, candidates: list[PlannerCandidate]) -> list[dict[str
     )
     user = (
         "Select one candidate_id and provide a short rationale. Every rationale.observed item "
-        "must cite a relevant evidence ID for that candidate.\n"
+        "must cite exactly one evidence ID listed for the selected candidate and no other ID. "
+        "Do not infer or restate IDs from findings or other candidates.\n"
         "UNTRUSTED_SCANNER_DATA_BEGIN\n" + summary + "\nUNTRUSTED_SCANNER_DATA_END\n"
         "CANDIDATES_JSON:\n" + json.dumps([{"candidate_id": c.candidate_id, "target": c.action.target, "port": c.action.ports[0], "exposure_state": c.exposure_state, "exposure_evidence_id": c.exposure_evidence_id, "evidence_ids": c.observed_evidence_ids, "planner_reason": c.planner_reason} for c in candidates], ensure_ascii=True)
     )

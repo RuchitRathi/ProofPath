@@ -62,6 +62,18 @@ NMAP_ADAPTERS = {
     )
 }
 
+if not st.session_state.get("ollama_warmup_attempted", False):
+    st.session_state.ollama_warmup_attempted = True
+    try:
+        warmup_config = OllamaConfig.from_yaml(OLLAMA_CONFIG_PATH)
+        if warmup_config.model_tag.strip():
+            OllamaClient(warmup_config).warmup()
+            AUDIT.append("ollama_warmup", "model-proposer", {"model_tag": warmup_config.model_tag, "status": "ok"})
+        else:
+            AUDIT.append("ollama_warmup", "model-proposer", {"model_tag": "", "status": "skipped_blank_tag"})
+    except Exception as exc:
+        AUDIT.append("ollama_warmup", "model-proposer", {"status": "unavailable", "reason": str(exc)[:500]})
+
 
 def _ports(text: str) -> list[int]:
     parts = [part.strip() for part in text.split(",") if part.strip()]
