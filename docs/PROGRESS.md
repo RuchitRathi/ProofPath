@@ -42,6 +42,7 @@ Day 2 scope is complete. Day 3 scope is complete through the rule-based skeptic.
 - 2026-11-06: Final Day 3 acceptance after Step 7, imported/live exposure separation, and IPv6 port-grounding correction: `python -m pytest -q` — 133 passed in 15.39s; `proofpath redteam` — 69 passed, 0 failed. Focused grounding/risk checks — 3 passed. No external host was contacted. Ollama download is still in progress.
 - 2026-11-06: Proposer correction — model schema selects from candidate-ID enum only; code builds the exact candidate action. Added relevant-evidence citation validation, one retry then audited deterministic fallback, Plan-tab code-generated exposure/evidence/risk facts, and plugin_output injection regression. Real Qwen batches (10 each): live exposure 10/10 JSON, 2 fallback, 11.560s average; imported exposure 10/10, 1 fallback, 9.574s; no web port: no candidates/model calls. Exact built-action match was 10/10 in both candidate cases. Live/imported top score changed 80.0 to 74.0; candidate ID remained C1.
 - 2026-11-06: Final proposer regression: `python -m pytest -q` — 130 passed in 11.40s; `proofpath redteam --scope scope.yaml` — 69 passed, 0 failed. Real model injection prompt omitted hostile Nessus plugin_output; selected C1, built the fixed scoped import_burp action, and scope guard allowed it.
+- 2026-11-06: Day 4 baseline committed and tagged `day3-done` (initial repository had no commits); `.gitignore` excludes pytest temp folders and samples_real. Added separate `scope.demo.yaml`, three SYNTHETIC fixtures, and guarded `demo-load`. Acceptance: 130 passed; demo-load reports 6 findings, 4 proposer candidates, one excluded Nessus and one excluded Burp item dropped, and a low-confidence closed-port false-positive candidate. Proposer selected C1 with deterministic fallback in the recorded run; model response was valid only after its fallback path.
 
 ## Next up
 
@@ -53,8 +54,8 @@ Day 2 scope is complete. Day 3 scope is complete through the rule-based skeptic.
 
 ### Day 4 plan
 
-- Build the baseline scorecard from the completed seven-point demo path.
-- Polish the README around verified commands and integration status.
+- Build the baseline scorecard from the synthetic demo dataset.
+- Add verified setup/demo documentation and integration status.
 - Rehearse the demo and record a fallback using synthetic/imported data.
 - Consider ZAP only if time remains; keep it behind the scope guard and label its mode truthfully.
 

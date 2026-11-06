@@ -187,6 +187,8 @@ After at least one UI action or test has created a log:
 
 `verify` checks the chain, evidence artifacts, report files and citations, and approval action references. `proofpath ground-check` checks findings saved for the current report against the ledger; unsupported CVE/CWE, IP, port, product/version, or evidence-ID claims are audited and return a non-zero result. IP grounding canonicalizes IPv4 and IPv6 literals so an IPv6 address suffix cannot be mistaken for a port.
 
+`python -m proofpath.cli demo-load --scope scope.demo.yaml --data data/demo` imports the labeled synthetic Nmap XML, Nessus XML, and Burp XML through the normal scope-guarded import paths, then prints findings, risk ranks, proposer candidates, and the chosen plan. `scope.demo.yaml` is separate from the default scope and excludes `10.20.0.250` inside the demo CIDR to exercise a dropped-host audit.
+
 `ollama.yaml` configures `qwen2.5:7b-instruct-q4_K_M`. Run `python scripts/check_ollama.py` to report reachability, list local tags through Ollama's API, report configured-tag presence, and make a schema-constrained proposer response check; the check uses only a labeled synthetic fixture. The tag is listed by the [official Ollama model library](https://ollama.com/library/qwen2.5%3A7b-instruct-q4_K_M) at about 4.7 GB. Set `PROOFPATH_OLLAMA_CONFIG` to a different YAML file to test the blank-tag fallback.
 
 Default scope file: engagement `lab-01`, allowed `10.10.0.0/16`, excluded host `10.10.0.1`, ports 22, 80, 443, 8080, 8443. Timing is capped at 3. Host timeout is capped at 120 seconds. The UI sends timing 2 and a 60 second host timeout.

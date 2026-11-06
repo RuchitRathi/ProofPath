@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 from pathlib import Path
 
 from proofpath.audit import AuditLog
@@ -11,6 +13,15 @@ from proofpath.selftest import run_approval_redteam, run_cases, run_grounding_re
 from proofpath.grounding import verify_finding
 from proofpath.schemas import Finding
 from proofpath.verification import verify_report_and_approvals
+from proofpath.adapters.base import execute_action
+from proofpath.adapters.burp_import import import_burp_xml
+from proofpath.adapters.nessus_import import import_nessus_xml
+from proofpath.adapters.nmap import RecordedNmapXMLAdapter
+from proofpath.correlator import correlate_findings
+from proofpath.normalizer import normalize_nmap_observations
+from proofpath.proposer import OllamaClient, OllamaConfig, RulePlanner, propose_and_gate
+from proofpath.risk import rank_findings
+from proofpath.scope_guard import ScopeGuard
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,6 +37,9 @@ def main(argv: list[str] | None = None) -> int:
     ground.add_argument("--findings", default="data/reports/current-findings.json")
     ground.add_argument("--ledger", default="data/evidence")
     ground.add_argument("--audit", default="data/audit.jsonl")
+    demo = sub.add_parser("demo-load", help="load the labeled synthetic demo dataset through guarded importers")
+    demo.add_argument("--scope", default="scope.demo.yaml")
+    demo.add_argument("--data", default="data/demo")
     args = parser.parse_args(argv)
     if args.command == "verify":
         path = Path(args.audit)
@@ -77,6 +91,33 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"ground-check error: {exc}")
             return 1
+    if args.command == "demo-load":
+        from proofpath.selftest import demo_resolver
+        scope = Path(args.scope)
+        data = Path(args.data)
+        guard = ScopeGuard.from_yaml(scope, resolver=demo_resolver)
+        audit = AuditLog(data / "audit.jsonl")
+        ledger = Ledger(data / "evidence")
+        fixture = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "demo"
+        nmap_raw = (fixture / "nmap.xml").read_bytes()
+        action = __import__("proofpath.schemas", fromlist=["Action", "ActionName"])
+        request = action.Action(id="demo-import-nmap", name=action.ActionName.IMPORT_NMAP_XML, target="10.20.0.10", ports=[80], engagement_id=guard.policy.engagement, requested_by="demo-loader")
+        nmap_result = execute_action(request, guard, audit, ledger, {action.ActionName.IMPORT_NMAP_XML: RecordedNmapXMLAdapter(nmap_raw)})
+        nessus = import_nessus_xml((fixture / "nessus.nessus").read_bytes(), guard, audit, ledger, actor="demo-loader")
+        burp = import_burp_xml((fixture / "burp.xml").read_bytes(), guard, audit, ledger, actor="demo-loader")
+        observations = normalize_nmap_observations(nmap_result.services)
+        findings = correlate_findings([*nessus.findings, *burp.findings], observations)
+        ranked = rank_findings(findings, observations)
+        planner = RulePlanner()
+        candidates = planner.candidates(observations, guard.policy.engagement)
+        result = {"source": "SYNTHETIC / imported", "nmap_evidence_id": nmap_result.evidence_id, "observations": len(observations), "findings": len(findings), "dropped_nessus": nessus.dropped_items, "dropped_burp": burp.dropped_issues, "ranked": [{"id": row.finding.id, "rank": row.rank, "score": row.priority_score, "status": row.finding.status} for row in ranked], "candidates": [{"candidate_id": c.candidate_id, "target": c.action.target, "port": c.action.ports[0], "exposure_state": c.exposure_state, "evidence_ids": c.observed_evidence_ids} for c in candidates]}
+        if candidates:
+            proposal, gated, fallback = propose_and_gate(observations, candidates, OllamaClient(OllamaConfig.from_yaml("ollama.yaml")), guard, audit, ledger, findings=findings)
+            result["proposal"] = {"candidate_id": proposal.candidate_id, "action": proposal.action.model_dump(mode="json"), "fallback": fallback, "guard_allowed": gated.decision.allowed if gated else False} if proposal else None
+        data.mkdir(parents=True, exist_ok=True)
+        (data / "current-findings.json").write_text(json.dumps([f.model_dump(mode="json") for f in findings], indent=2), encoding="utf-8")
+        print(json.dumps(result, indent=2))
+        return 0
     scope = Path(args.scope)
     if not scope.is_file():
         print("scope file was not found")

@@ -1,0 +1,21 @@
+engagement: demo-synthetic
+allowed_cidrs:
+  - 10.20.0.0/24
+excluded_cidrs: []
+excluded_hosts:
+  - 10.20.0.250
+allowed_ports: ["22", "80", "443", "8080", "8443"]
+allow_loopback: false
+rate_limits:
+  max_timing: 3
+  max_host_timeout_seconds: 120
+enabled_actions: [nmap_scan, import_nmap_xml, import_nessus, import_burp]
+allowed_validation_paths: []
+tool_arguments:
+  nmap:
+    service_detection: {type: bool}
+    skip_host_discovery: {type: bool}
+    timing: {type: int, minimum: 0, maximum: 3}
+    host_timeout_seconds: {type: int, minimum: 1, maximum: 120}
+  nessus: {}
+  burp: {}

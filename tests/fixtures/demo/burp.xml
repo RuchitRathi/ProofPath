@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC Burp demo dataset; not a scanner export. -->
+<issues>
+  <issue><serialNumber>700001</serialNumber><type>999</type><name>SYNTHETIC shared web issue</name><host>http://10.20.0.10:80</host><path>/demo</path><location>demo</location><severity>High</severity><confidence>Firm</confidence><issueDetail>Synthetic shared issue CVE-2099-900001 CWE-79.</issueDetail></issue>
+  <issue><serialNumber>700002</serialNumber><type>998</type><name>SYNTHETIC same CVE second host</name><host>http://10.20.0.11:80</host><path>/demo-conflict</path><location>demo</location><severity>Low</severity><confidence>Tentative</confidence><issueDetail>Synthetic same CVE and CWE-79 with conflicting severity on second host.</issueDetail><cwe>CWE-79</cwe><issueBackground>CVE-2099-900001</issueBackground></issue>
+  <issue><serialNumber>700003</serialNumber><type>997</type><name>SYNTHETIC third web issue</name><host>http://10.20.0.10:8080</host><path>/demo-third</path><location>demo</location><severity>Medium</severity><confidence>Firm</confidence><issueDetail>Synthetic finding CWE-20.</issueDetail></issue>
+  <issue><serialNumber>700004</serialNumber><type>996</type><name>SYNTHETIC excluded issue</name><host>http://10.20.0.250:80</host><path>/drop</path><location>demo</location><severity>High</severity><confidence>Firm</confidence><issueDetail>Must be dropped.</issueDetail></issue>
+</issues>

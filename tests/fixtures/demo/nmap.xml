@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC demo fixture only; no scan was performed. -->
+<nmaprun scanner="nmap" args="SYNTHETIC demo fixture">
+  <host><status state="up"/><address addr="10.20.0.10" addrtype="ipv4"/><ports>
+    <port protocol="tcp" portid="80"><state state="open"/><service name="http"/></port>
+    <port protocol="tcp" portid="443"><state state="open"/><service name="https"/></port>
+    <port protocol="tcp" portid="8080"><state state="open"/><service name="http-proxy"/></port>
+    <port protocol="tcp" portid="22"><state state="closed"/><service name="ssh"/></port>
+    <port protocol="tcp" portid="8443"><state state="closed"/><service name="https"/></port>
+  </ports></host>
+  <host><status state="up"/><address addr="10.20.0.11" addrtype="ipv4"/><ports><port protocol="tcp" portid="80"><state state="open"/><service name="http"/></port></ports></host>
+</nmaprun>

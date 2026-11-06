@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC demo dataset only; identifiers and CVEs are placeholders. -->
+<NessusClientData_v2><Report name="SYNTHETIC ProofPath demo">
+  <ReportHost name="10.20.0.10"><HostProperties><tag name="host-ip">10.20.0.10</tag></HostProperties>
+    <ReportItem port="80" svc_name="http" protocol="tcp" severity="3" pluginID="DEMO-001" pluginName="SYNTHETIC shared web issue"><description>Synthetic shared issue CVE-2099-900001 CWE-79.</description><cve>CVE-2099-900001</cve><cwe>CWE-79</cwe></ReportItem>
+    <ReportItem port="443" svc_name="https" protocol="tcp" severity="1" pluginID="DEMO-002" pluginName="SYNTHETIC low confidence issue"><description>Synthetic low confidence issue CWE-89.</description><cwe>CWE-89</cwe></ReportItem>
+    <ReportItem port="8443" svc_name="https" protocol="tcp" severity="1" pluginID="DEMO-004" pluginName="SYNTHETIC closed port false-positive candidate"><description>Synthetic low-confidence finding contradicted by imported closed-port evidence CWE-200.</description><cwe>CWE-200</cwe></ReportItem>
+  </ReportHost>
+  <ReportHost name="10.20.0.11"><HostProperties><tag name="host-ip">10.20.0.11</tag></HostProperties>
+    <ReportItem port="80" svc_name="http" protocol="tcp" severity="2" pluginID="DEMO-003" pluginName="SYNTHETIC same CVE second host"><description>Synthetic same CVE on second host CVE-2099-900001 CWE-79.</description><cve>CVE-2099-900001</cve><cwe>CWE-79</cwe></ReportItem>
+  </ReportHost>
+  <ReportHost name="10.20.0.250"><HostProperties><tag name="host-ip">10.20.0.250</tag></HostProperties><ReportItem port="80" svc_name="http" protocol="tcp" severity="4" pluginID="DEMO-OUT" pluginName="SYNTHETIC excluded issue"><description>Must be dropped.</description></ReportItem></ReportHost>
+</Report></NessusClientData_v2>
