@@ -124,11 +124,11 @@ Status is what the code can do today.
 
 | Tool | Status | Limitation |
 | --- | --- | --- |
-| Nmap | Live | Runs Ubuntu WSL Nmap 7.98 through a fixed `wsl.exe --distribution Ubuntu --exec nmap` argv prefix. Recorded XML import remains labeled imported. Service/port detection only; NSE disabled. Guarded `skip_host_discovery` maps to `-Pn` and defaults off. |
+| Nmap | Live | Runs Ubuntu WSL Nmap 7.98 through a fixed `wsl.exe --distribution Ubuntu --exec nmap` argv prefix with `-sT`. Verified run was only against 127.0.0.1 inside WSL and returned a closed port; Windows in-process server was not reachable from WSL loopback. Recorded XML import remains labeled imported. NSE disabled. Guarded `skip_host_discovery` maps to `-Pn` and defaults off. |
 | Nikto | Planned | No executor is registered. |
 | OWASP ZAP | Planned | The Docker daemon API is not wired. |
 | Nessus | Import-only | Bounded `NessusClientData_v2` parser; synthetic fixture only, real-export details need confirmation. |
-| Burp Suite | Import-only | A single internal DTD containing only ELEMENT/ATTLIST declarations is stripped before parsing. Entity declarations/references and SYSTEM/PUBLIC identifiers are refused; no entity resolution or network access is enabled. Host text/IP attribute and direct or nested request/response elements are supported. Message bodies stay raw. |
+| Burp Suite | Import-only | A single validated internal DTD containing only ELEMENT/ATTLIST declarations is stripped before parsing. Entity declarations/references and SYSTEM/PUBLIC identifiers are refused; no entity resolution or network access is enabled. Host text/IP attribute and direct or nested request/response elements are supported. Message bodies stay raw. |
 | ProofPath HTTP validation | Live | One approved GET/HEAD to an allowlisted path on one scoped port. No request body, caller-supplied headers, or redirect following; response capped at 4 KiB. |
 | OpenVAS | Planned | The intended mode is report import. The parser is not built. |
 | Metasploit | Planned | No executor is registered. |

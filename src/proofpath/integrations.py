@@ -10,7 +10,7 @@ INTEGRATIONS: list[dict[str, str]] = [
     {
         "tool": "Nmap",
         "mode": "Live",
-        "limitation": "Nmap: Live through configured native or WSL runtime; this workstation uses WSL Ubuntu. Recorded XML import remains labeled imported. Guarded skip_host_discovery maps to -Pn and defaults off.",
+        "limitation": "Live-capable; this workstation's WSL Ubuntu 7.98 run was verified only against 127.0.0.1 inside WSL and returned a closed port. The Windows in-process server was not reachable from WSL loopback. Recorded XML import remains labeled imported. Guarded skip_host_discovery maps to -Pn and defaults off.",
     },
     {
         "tool": "Nikto",
@@ -30,7 +30,7 @@ INTEGRATIONS: list[dict[str, str]] = [
     {
         "tool": "Burp Suite",
         "mode": "Import-only",
-        "limitation": "Imports bounded DTD-free issue XML. Standard exports may include an internal DTD and are refused by the safe parser.",
+        "limitation": "Imports bounded issue XML; one validated internal ELEMENT/ATTLIST DTD subset is accepted after stripping. Entities, external identifiers, and other DTD forms are refused.",
     },
     {
         "tool": "OpenVAS",
