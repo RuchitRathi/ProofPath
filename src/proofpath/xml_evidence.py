@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import re
 from xml.parsers import expat
 import xml.etree.ElementTree as ET
 
@@ -35,7 +36,9 @@ def parse_xml_evidence(raw: bytes, *, label: str) -> XmlDocument:
     if len(raw) > MAX_IMPORT_BYTES:
         raise ValueError(f"{label} XML exceeds the {MAX_IMPORT_BYTES}-byte import limit")
     lowered = raw.lower()
-    if b"<!doctype" in lowered or b"<!entity" in lowered:
+    doctype = re.findall(rb"<!doctype\s+[^>]*>", raw, flags=re.IGNORECASE)
+    safe_nmap_doctype = label == "nmap" and doctype == [b"<!DOCTYPE nmaprun>"] and b"<!entity" not in lowered
+    if (b"<!doctype" in lowered and not safe_nmap_doctype) or b"<!entity" in lowered:
         raise ValueError(f"{label} XML with a DOCTYPE or entity declaration is refused")
     if not raw.strip():
         raise ValueError(f"empty {label} XML")

@@ -69,6 +69,14 @@ def test_parser_ignores_script_elements_and_refuses_doctype() -> None:
     assert "CVE-2099-0000" not in rows[0].model_dump().values()
     with pytest.raises(ValueError):
         parse_nmap_xml(b"<!DOCTYPE nmaprun [<!ENTITY x 'y'>]><nmaprun></nmaprun>", "EV-0001")
+    with pytest.raises(ValueError):
+        parse_nmap_xml(b'<!DOCTYPE nmaprun SYSTEM "http://example.invalid/x"><nmaprun></nmaprun>', "EV-0001")
+
+
+def test_parser_accepts_nmap_standard_inert_doctype() -> None:
+    xml = FIXTURE.replace(b'<?xml version="1.0" encoding="UTF-8"?>', b'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE nmaprun>', 1)
+    rows = parse_nmap_xml(xml, "EV-0001")
+    assert len(rows) == 2
 
 
 def test_execute_allowed_scan(tmp_path: Path) -> None:

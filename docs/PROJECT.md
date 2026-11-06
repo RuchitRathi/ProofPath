@@ -161,7 +161,7 @@ Trust boundary: `scope.yaml` is operator input. The analyst request, DNS answers
 | Report injection | PDF text is deterministic and grounded against cited ledger evidence; unsupported AI claims are rejected and fall back to template text. |
 | Accidental whole-internet scope | IPv4 prefixes shorter than /8, IPv6 prefixes shorter than /32, and prefix length 0 are rejected when the policy loads. |
 | Huge tool output | Stdout above 8,000,000 bytes is not stored and produces no port rows. |
-| XML doctype / XXE | Nmap and Nessus refuse every DOCTYPE. Burp strips one internal subset only after verifying it contains ELEMENT/ATTLIST declarations only; entity declarations/references and SYSTEM/PUBLIC IDs are refused before XML parsing. No external entity resolver is configured. |
+| XML doctype / XXE | Nmap permits only its exact inert `<!DOCTYPE nmaprun>` declaration and rejects internal subsets, entities, and external identifiers. Nessus refuses every DOCTYPE. Burp strips one internal subset only after verifying it contains ELEMENT/ATTLIST declarations only; entity declarations/references and SYSTEM/PUBLIC IDs are refused before XML parsing. No external entity resolver is configured. |
 
 `proofpath redteam` uses a fake resolver and local policy for scope checks. Its approval cases bind a temporary HTTP server to 127.0.0.1; it sends no external traffic.
 
