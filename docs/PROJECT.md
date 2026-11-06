@@ -223,7 +223,7 @@ The eight weighted judging criteria remain in section 3; the seven live-demo ite
 
 - The configured Ollama model is local and optional at runtime. UI request text is not interpreted as instructions to a tool; model response quality depends on schema validation and analyst review.
 - Approval state is process-local in the Streamlit session; the durable audit log records request, decision, execution, and outcome. A process restart invalidates in-memory approvals. The skeptic is rule-based and does not update status from hypotheses alone.
-- Nmap argv is `nmap -oX -` plus optional `-sV`, `-Pn` (only when its guarded boolean is true), `-T{n}`, `--host-timeout`, `-p`, and canonical IPs. Host discovery is on by default. NSE scripts are never passed.
+- Nmap argv is `nmap -sT -oX -` plus optional `-sV`, `-Pn` (only when its guarded boolean is true), `-T{n}`, `--host-timeout`, `-p`, and canonical IPs. TCP connect scanning is explicit for WSL compatibility. Host discovery is on by default. NSE scripts are never passed.
 - A timeout stores whatever stdout was captured and does not turn it into port rows.
 - A non-zero exit with parseable XML is status `error`, and the parsed rows are still returned because they were in the document.
 - Excluded hostnames resolve at policy load and their addresses are added to exclusions. An unresolvable excluded hostname rejects the policy.

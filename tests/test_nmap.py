@@ -256,7 +256,8 @@ def test_wsl_argv_wraps_only_the_guarded_nmap_argument_list() -> None:
     decision = _guard().check(_action())
     argv = build_argv("nmap", decision, wsl_distribution="Ubuntu")
     assert argv[:5] == ["wsl.exe", "--distribution", "Ubuntu", "--exec", "nmap"]
-    assert argv[5:7] == ["-oX", "-"]
+    assert argv[5:8] == ["-sT", "-oX", "-"]
+    assert "-sS" not in argv
     assert "10.10.1.5" in argv
     assert "--script" not in argv
     with pytest.raises(ValueError, match="distribution"):

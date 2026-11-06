@@ -76,7 +76,7 @@ def build_argv(binary: str, decision: GuardDecision, *, wsl_distribution: str | 
         if type(port) is not int or not 1 <= port <= 65535:
             raise ValueError("port is not allowed")
         port_text.append(str(port))
-    argv = [binary, "-oX", "-"]
+    argv = [binary, "-sT", "-oX", "-"]
     if decision.normalized_arguments.get("service_detection") is True:
         argv.append("-sV")
     if decision.normalized_arguments.get("skip_host_discovery") is True:
