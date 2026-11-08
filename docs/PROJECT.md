@@ -19,7 +19,7 @@ All 7 named tools from the problem statement have dedicated adapters: live and i
 ## 2. Personas
 
 - Analyst: types a request and a target, reads the scope decision, and reviews evidence IDs before accepting a finding.
-- Engagement lead: edits `scope.yaml`. That file is the authorization boundary. The UI cannot widen it.
+- Engagement lead: edits `scope.yaml`. That file is the default authorization boundary, containing RFC1918 subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) or configurable custom CIDRs. In the console, the analyst may optionally toggle "Permit All Target IPs (Open Scope Mode)" for engagements targeting arbitrary external/lab addresses.
 - Client: reads the eventual report. Every finding they see must cite evidence. Scores that were not supplied by a tool are shown as "not provided".
 
 ## 3. Judging criteria and how each is addressed

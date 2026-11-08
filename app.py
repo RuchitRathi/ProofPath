@@ -198,7 +198,13 @@ def _show_finding_table(findings: list[Finding]) -> None:
 with st.sidebar:
     st.markdown("### Engagement Scope")
     st.text(f"ID: {GUARD.policy.engagement}")
-    st.text("Allowed: " + ", ".join(GUARD.policy.allowed_cidrs))
+    open_scope = st.toggle("Permit All Target IPs (Open Scope Mode)", value=False, key="permit_all_ips_mode", help="Authorizes scanning across any IP address or subnet boundary without scope restriction.")
+    if open_scope:
+        GUARD.policy = GUARD.policy.model_copy(update={"allow_all_ips": True})
+        st.caption("Active: Universal IP scope enabled.")
+    else:
+        GUARD.policy = GUARD.policy.model_copy(update={"allow_all_ips": False})
+        st.text("Allowed: " + ", ".join(GUARD.policy.allowed_cidrs))
     st.text("Excluded: " + (", ".join(GUARD.policy.excluded_hosts) or "None"))
     st.text("Ports: " + ", ".join(GUARD.policy.allowed_ports))
     st.text("Engine: " + (f"WSL ({NMAP_CONFIG.distribution})" if NMAP_CONFIG.runtime == "wsl" else "Native"))

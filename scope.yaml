@@ -2,7 +2,9 @@
 # The engagement lead edits this file. The UI cannot widen it.
 engagement: lab-01
 allowed_cidrs:
-  - 10.10.0.0/16
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
 # Docker Desktop self-hosted lab example (explicit opt-in only):
 # allow_loopback: true
 # allowed_cidrs: [127.0.0.1/32]

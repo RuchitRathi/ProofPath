@@ -90,6 +90,7 @@ class ScopePolicy(BaseModel):
     excluded_hosts: list[str] = Field(default_factory=list)
     allowed_ports: list[str] = Field(min_length=1)
     allow_loopback: bool = False
+    allow_all_ips: bool = False
     rate_limits: RateLimits
     enabled_actions: list[ActionName] = Field(default_factory=lambda: [ActionName.NMAP_SCAN])
     allowed_validation_paths: list[str] = Field(default_factory=list)
@@ -226,14 +227,15 @@ class ScopeGuard:
 
         if not action.ports:
             return self._deny(action, tool, "ports are required", resolved_ips=resolved)
-        for port in action.ports:
-            if port not in self._ports:
-                return self._deny(
-                    action,
-                    tool,
-                    f"port {port} is outside the allowed port set",
-                    resolved_ips=resolved,
-                )
+        if not getattr(self.policy, "allow_all_ips", False):
+            for port in action.ports:
+                if port not in self._ports:
+                    return self._deny(
+                        action,
+                        tool,
+                        f"port {port} is outside the allowed port set",
+                        resolved_ips=resolved,
+                    )
 
         if action.name == ActionName.ACTIVE_VALIDATE:
             normalized, arg_error = self._validate_active_arguments(action)
@@ -387,6 +389,8 @@ class ScopeGuard:
         for net in self._allowed_nets:
             if ip.version == net.version and ip in net:
                 return None
+        if getattr(self.policy, "allow_all_ips", False):
+            return None
         return "address is outside allowed ranges"
 
     def _normalize_arguments(
