@@ -154,3 +154,14 @@ def test_findings_ui_displays_conflict_note_and_both_sources() -> None:
     tables = "\n".join(str(item.value) for item in app.dataframe)
     assert "nessus, burp" in tables
     assert not app.exception
+
+
+def test_agent_and_assistant_tabs_render(monkeypatch) -> None:
+    app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=20).run()
+    assert not app.exception
+    subheaders = "\n".join(item.value for item in app.subheader if isinstance(item.value, str))
+    assert "Autonomous VAPT Agent" in subheaders
+    assert "Conversational Security Assistant" in subheaders
+    assert any("Start Autonomous Assessment" in getattr(btn, "label", "") for btn in app.button)
+    assert any("Assistant" in getattr(btn, "label", "") for btn in app.button)
+
