@@ -5,12 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 
 from proofpath.audit import AuditLog
 from proofpath.ledger import Ledger
 from proofpath.selftest import run_approval_redteam, run_cases, run_grounding_redteam, run_injection_redteam
-from proofpath.grounding import verify_finding
+from proofpath.grounding import verify_finding, verify_text
 from proofpath.schemas import Finding
 from proofpath.verification import verify_report_and_approvals
 from proofpath.adapters.base import execute_action
@@ -40,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     demo = sub.add_parser("demo-load", help="load the labeled synthetic demo dataset through guarded importers")
     demo.add_argument("--scope", default="scope.demo.yaml")
     demo.add_argument("--data", default="data/demo")
+    demo.add_argument("--all-tools", action="store_true", help="import all 7 tool reports (Nmap, Nessus, Burp, OpenVAS, Nikto, ZAP, Metasploit)")
     args = parser.parse_args(argv)
     if args.command == "verify":
         path = Path(args.audit)
@@ -105,15 +107,64 @@ def main(argv: list[str] | None = None) -> int:
         nmap_result = execute_action(request, guard, audit, ledger, {action.ActionName.IMPORT_NMAP_XML: RecordedNmapXMLAdapter(nmap_raw)})
         nessus = import_nessus_xml((fixture / "nessus.nessus").read_bytes(), guard, audit, ledger, actor="demo-loader")
         burp = import_burp_xml((fixture / "burp.xml").read_bytes(), guard, audit, ledger, actor="demo-loader")
+        all_raw_findings = [*nessus.findings, *burp.findings]
+
+        if getattr(args, "all_tools", False):
+            from proofpath.adapters.openvas_import import import_openvas_xml
+            from proofpath.adapters.nikto_import import import_nikto_report
+            from proofpath.adapters.zap_import import import_zap_report
+            from proofpath.adapters.metasploit_import import import_metasploit_report
+
+            if (fixture / "openvas.xml").is_file():
+                ov = import_openvas_xml((fixture / "openvas.xml").read_bytes(), guard, audit, ledger, actor="demo-loader")
+                all_raw_findings.extend(ov.findings)
+            if (fixture / "nikto.json").is_file():
+                nk = import_nikto_report((fixture / "nikto.json").read_bytes(), guard, audit, ledger, actor="demo-loader")
+                all_raw_findings.extend(nk.findings)
+            if (fixture / "zap.xml").is_file():
+                zp = import_zap_report((fixture / "zap.xml").read_bytes(), guard, audit, ledger, actor="demo-loader")
+                all_raw_findings.extend(zp.findings)
+            if (fixture / "metasploit.xml").is_file():
+                ms = import_metasploit_report((fixture / "metasploit.xml").read_bytes(), guard, audit, ledger, actor="demo-loader")
+                all_raw_findings.extend(ms.findings)
+
         observations = normalize_nmap_observations(nmap_result.services)
-        findings = correlate_findings([*nessus.findings, *burp.findings], observations)
+        findings = correlate_findings(all_raw_findings, observations)
         ranked = rank_findings(findings, observations)
         planner = RulePlanner()
-        candidates = planner.candidates(observations, guard.policy.engagement)
-        result = {"source": "SYNTHETIC / imported", "nmap_evidence_id": nmap_result.evidence_id, "observations": len(observations), "findings": len(findings), "dropped_nessus": nessus.dropped_items, "dropped_burp": burp.dropped_issues, "ranked": [{"id": row.finding.id, "rank": row.rank, "score": row.priority_score, "status": row.finding.status} for row in ranked], "candidates": [{"candidate_id": c.candidate_id, "target": c.action.target, "port": c.action.ports[0], "exposure_state": c.exposure_state, "evidence_ids": c.observed_evidence_ids} for c in candidates]}
+        candidates = planner.candidates(
+            observations,
+            guard.policy.engagement,
+            findings=findings,
+            enabled_actions=set(guard.policy.enabled_actions),
+        )
+        result = {"source": "SYNTHETIC / imported", "nmap_evidence_id": nmap_result.evidence_id, "observations": len(observations), "findings": len(findings), "dropped_nessus": nessus.dropped_items, "dropped_burp": burp.dropped_issues, "ranked": [{"id": row.finding.id, "rank": row.rank, "score": row.priority_score, "status": row.finding.status} for row in ranked], "candidates": [{"candidate_id": c.candidate_id, "action_type": c.action.name.value, "target": c.action.target, "port": c.action.ports[0], "exposure_state": c.exposure_state, "risk_score": c.risk_score, "risk_factors": c.risk_factors, "expected_result": c.expected_result, "evidence_ids": c.observed_evidence_ids} for c in candidates]}
         if candidates:
-            proposal, gated, fallback = propose_and_gate(observations, candidates, OllamaClient(OllamaConfig.from_yaml("ollama.yaml")), guard, audit, ledger, findings=findings)
-            result["proposal"] = {"candidate_id": proposal.candidate_id, "action": proposal.action.model_dump(mode="json"), "fallback": fallback, "guard_allowed": gated.decision.allowed if gated else False} if proposal else None
+            client = OllamaClient(OllamaConfig.from_yaml("ollama.yaml"))
+            proposal_audit_start = len(audit.read_entries())
+            proposal, gated, fallback = propose_and_gate(observations, candidates, client, guard, audit, ledger, findings=findings)
+            proposal_events = audit.read_entries()[proposal_audit_start:]
+            if proposal:
+                rationale_text = " ".join([
+                    *proposal.rationale.observed,
+                    proposal.rationale.inferred,
+                    proposal.rationale.why,
+                ])
+                cited_ids = list(dict.fromkeys(re.findall(r"\bEV-\d+\b", rationale_text)))
+                grounding = verify_text(rationale_text, cited_ids, ledger)
+                result["proposal"] = {
+                    "candidate_id": proposal.candidate_id,
+                    "action": proposal.action.model_dump(mode="json"),
+                    "rationale": proposal.rationale.model_dump(mode="json") if grounding.accepted else None,
+                    "rationale_grounding": {"accepted": grounding.accepted, "violations": list(grounding.violations)},
+                    "fallback": fallback,
+                    "model_call_count": sum(entry.event_type == "model_call_metrics" for entry in proposal_events),
+                    "rejected_model_outputs": [entry.details.get("reason", "") for entry in proposal_events if entry.event_type == "model_output_rejected"],
+                    "guard_allowed": gated.decision.allowed if gated else False,
+                    "model_metrics": client.last_metrics,
+                }
+            else:
+                result["proposal"] = None
         data.mkdir(parents=True, exist_ok=True)
         (data / "current-findings.json").write_text(json.dumps([f.model_dump(mode="json") for f in findings], indent=2), encoding="utf-8")
         print(json.dumps(result, indent=2))

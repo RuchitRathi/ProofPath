@@ -44,6 +44,9 @@ _TOOL_FOR_ACTION = {
     ActionName.IMPORT_BURP: "burp",
     ActionName.ACTIVE_VALIDATE: "active_validate",
     ActionName.IMPORT_OPENVAS: "openvas",
+    ActionName.IMPORT_NIKTO: "nikto",
+    ActionName.IMPORT_ZAP: "zap",
+    ActionName.IMPORT_METASPLOIT: "metasploit",
 }
 
 

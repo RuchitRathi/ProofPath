@@ -9,7 +9,7 @@ allow_loopback: false
 rate_limits:
   max_timing: 3
   max_host_timeout_seconds: 120
-enabled_actions: [nmap_scan, import_nmap_xml, import_nessus, import_burp]
+enabled_actions: [nmap_scan, import_nmap_xml, import_nessus, import_burp, import_openvas, import_nikto, import_zap, import_metasploit]
 allowed_validation_paths: []
 tool_arguments:
   nmap:
@@ -19,3 +19,7 @@ tool_arguments:
     host_timeout_seconds: {type: int, minimum: 1, maximum: 120}
   nessus: {}
   burp: {}
+  openvas: {}
+  nikto: {}
+  zap: {}
+  metasploit: {}

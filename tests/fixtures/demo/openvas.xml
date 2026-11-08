@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC demo fixture only; values do not describe a real host. -->
+<report id="demo-ov-01">
+  <report id="sub-01">
+    <results>
+      <result id="ov-res-001">
+        <name>Apache HTTP Server Path Traversal</name>
+        <host>10.20.0.10</host>
+        <port>80/tcp</port>
+        <threat>High</threat>
+        <severity>7.5</severity>
+        <description>Path traversal vulnerability detected on Apache HTTP Server.</description>
+        <nvt oid="1.3.6.1.4.1.25623.1.0.999901">
+          <name>Apache Path Traversal Check</name>
+          <cvss_base>7.5</cvss_base>
+          <cve>CVE-2021-41773</cve>
+          <cwe>CWE-22</cwe>
+          <solution>Upgrade to Apache 2.4.51 or later.</solution>
+        </nvt>
+      </result>
+    </results>
+  </report>
+</report>

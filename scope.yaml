@@ -27,6 +27,10 @@ enabled_actions:
   - import_nmap_xml
   - import_nessus
   - import_burp
+  - import_openvas
+  - import_nikto
+  - import_zap
+  - import_metasploit
   - active_validate
 allowed_validation_paths:
   - /
@@ -46,3 +50,7 @@ tool_arguments:
       maximum: 120
   nessus: {}
   burp: {}
+  openvas: {}
+  nikto: {}
+  zap: {}
+  metasploit: {}

@@ -14,13 +14,13 @@ INTEGRATIONS: list[dict[str, str]] = [
     },
     {
         "tool": "Nikto",
-        "mode": "Planned",
-        "limitation": "No executor is registered.",
+        "mode": "Import-only",
+        "limitation": "Imports bounded Nikto JSON or XML reports. Web configuration issues, sensitive paths, and headers are normalized with source evidence references.",
     },
     {
         "tool": "OWASP ZAP",
-        "mode": "Planned",
-        "limitation": "The Docker daemon API is not wired.",
+        "mode": "Import-only",
+        "limitation": "Imports bounded OWASP ZAP XML or JSON alert reports. Web application alerts, CWE/WASC classifications, and solutions are normalized with evidence references.",
     },
     {
         "tool": "Nessus",
@@ -34,13 +34,13 @@ INTEGRATIONS: list[dict[str, str]] = [
     },
     {
         "tool": "OpenVAS",
-        "mode": "Planned",
-        "limitation": "The intended mode is report import. The parser is not built.",
+        "mode": "Import-only",
+        "limitation": "Imports bounded OpenVAS / Greenbone XML report exports. Vulnerability checks, CVSS, and CVE references are normalized with source evidence references.",
     },
     {
         "tool": "Metasploit",
-        "mode": "Planned",
-        "limitation": "No Metasploit integration is built.",
+        "mode": "Import-only",
+        "limitation": "Imports human-approved, lab-controlled Metasploit findings and validation exports. Autonomous exploitation is strictly prohibited.",
     },
     {
         "tool": "ProofPath HTTP validation",

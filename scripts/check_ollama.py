@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from urllib.request import Request, urlopen
 
-from proofpath.proposer import OllamaConfig, ProposedAction
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from proofpath.proposer import CandidateSelection, OllamaClient, OllamaConfig
 
 
 def main() -> int:
-    config = OllamaConfig.from_yaml("ollama.yaml")
+    config = OllamaConfig.from_yaml(ROOT / "ollama.yaml")
     tags_url = config.base_url.rstrip("/") + "/api/tags"
     try:
         with urlopen(tags_url, timeout=3) as response:
@@ -33,35 +40,23 @@ def main() -> int:
         return 0
     print(f"Configured tag {tag!r} exists: yes")
 
-    payload = {
-        "model": tag,
-        "stream": False,
-        "format": ProposedAction.model_json_schema(),
-        "messages": [{
-            "role": "user",
-            "content": (
-                "Return a schema-valid synthetic proposer object only. Use action name import_burp, "
-                "target 10.10.1.5, ports [80], engagement_id lab-01, requested_by planner. "
-                "Use evidence ID EV-TEST in the observed rationale. This is a schema test fixture, "
-                "not a real scan or evidence claim."
-            ),
-        }],
-    }
-    request = Request(
-        config.base_url.rstrip("/") + "/api/chat",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urlopen(request, timeout=config.timeout_seconds) as response:
-            result = json.loads(response.read(1_000_001))
-        content = result.get("message", {}).get("content")
-        ProposedAction.model_validate_json(content)
+        schema = CandidateSelection.model_json_schema()
+        schema["properties"]["candidate_id"]["enum"] = ["C1"]
+        content = OllamaClient(config).complete(
+            [
+                {"role": "system", "content": "Return candidate_id and rationale only. Never return action fields."},
+                {"role": "user", "content": "Select C1. Cite EV-TEST in one observed item. This is synthetic schema-test text."},
+            ],
+            schema,
+        )
+        parsed = CandidateSelection.model_validate_json(content)
+        if parsed.candidate_id != "C1":
+            raise ValueError("model returned a candidate outside the test enum")
     except Exception as exc:
         print(f"Schema-constrained test call FAILED: {exc}")
         return 1
-    print(f"Schema-constrained test call PASS for {tag} (synthetic fixture only).")
+    print(f"Schema-constrained candidate-selection test PASS for {tag} (synthetic fixture only).")
     return 0
 
 

@@ -16,8 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from proofpath.adapters.base import ToolResult, execute_action
 from proofpath.audit import AuditLog
 from proofpath.ledger import Ledger
+from proofpath.risk import rank_findings
 from proofpath.schemas import Action, ActionName, GuardDecision, ServiceObservation
 from proofpath.scope_guard import ScopeGuard
+from proofpath.threat_intel import PublicThreatIntel
 
 _EVIDENCE_ID = re.compile(r"\bEV-\d{4,}\b")
 _MAX_MODEL_RESPONSE = 1_000_000
@@ -135,6 +137,10 @@ class PlannerCandidate(BaseModel):
     candidate_id: str = "C1"
     observed_evidence_ids: list[str]
     planner_reason: str
+    expected_result: str = ""
+    risk_score: float | None = None
+    risk_factors: list[str] = Field(default_factory=list)
+    related_finding_ids: list[str] = Field(default_factory=list)
     exposure_state: str = "unknown"
     exposure_evidence_id: str | None = None
 
@@ -144,7 +150,7 @@ def action_fingerprint(action: Action) -> tuple[str, str, tuple[int, ...]]:
 
 
 class RulePlanner:
-    """Offer a Burp XML review/import candidate for observed open web ports."""
+    """Create distinct evidence-backed next steps from current observations and findings."""
 
     def candidates(
         self,
@@ -152,8 +158,20 @@ class RulePlanner:
         engagement_id: str,
         *,
         executed: set[tuple[str, str, tuple[int, ...]]] | None = None,
+        findings: list[Any] | None = None,
+        criticality: dict[str, str] | None = None,
+        enabled_actions: set[ActionName] | None = None,
+        public_intel: PublicThreatIntel | None = None,
     ) -> list[PlannerCandidate]:
-        candidates, _skipped = self.evaluate(observations, engagement_id, executed=executed)
+        candidates, _skipped = self.evaluate(
+            observations,
+            engagement_id,
+            executed=executed,
+            findings=findings,
+            criticality=criticality,
+            enabled_actions=enabled_actions,
+            public_intel=public_intel,
+        )
         return candidates
 
     def evaluate(
@@ -162,51 +180,218 @@ class RulePlanner:
         engagement_id: str,
         *,
         executed: set[tuple[str, str, tuple[int, ...]]] | None = None,
+        findings: list[Any] | None = None,
+        criticality: dict[str, str] | None = None,
+        enabled_actions: set[ActionName] | None = None,
+        public_intel: PublicThreatIntel | None = None,
     ) -> tuple[list[PlannerCandidate], list[tuple[PlannerCandidate, str]]]:
         executed = executed or set()
+        findings = findings or []
         planned: list[PlannerCandidate] = []
         skipped: list[tuple[PlannerCandidate, str]] = []
         seen: set[tuple[str, str, tuple[int, ...]]] = set()
+        imported_by_endpoint: dict[tuple[str, int, str], ServiceObservation] = {}
+        live_by_endpoint: dict[tuple[str, int, str], ServiceObservation] = {}
         for observation in observations:
+            key = (observation.ip.casefold(), observation.port, observation.protocol.casefold())
+            destination = live_by_endpoint if observation.source_mode == "live" else imported_by_endpoint
+            destination[key] = observation
+        effective_observations = [
+            live_by_endpoint.get(key, imported_by_endpoint.get(key))
+            for key in dict.fromkeys([*imported_by_endpoint, *live_by_endpoint])
+        ]
+        current_observations = [item for item in effective_observations if item is not None]
+        ranked = rank_findings(findings, current_observations, criticality, public_intel) if findings else []
+        available_actions = enabled_actions if enabled_actions is not None else {
+            ActionName.NMAP_SCAN,
+            ActionName.IMPORT_BURP,
+            ActionName.IMPORT_NESSUS,
+        }
+        host_nessus_candidate: set[str] = set()
+        host_openvas_candidate: set[str] = set()
+        for observation in effective_observations:
+            if observation is None:
+                continue
             if observation.state.casefold() != "open" or observation.port not in {80, 443, 8080, 8443}:
                 continue
             if observation.service and observation.service.casefold() not in {"http", "https", "http-proxy", "ssl/http"}:
                 continue
-            action = Action(
-                id="plan-" + hashlib.sha256(f"burp|{observation.ip}|{observation.port}".encode()).hexdigest()[:16],
-                name=ActionName.IMPORT_BURP,
-                target=observation.ip,
-                ports=[observation.port],
-                arguments={},
-                engagement_id=engagement_id,
-                requested_by="planner",
+            related = [item for item in findings if item.asset.ip == observation.ip and item.port == observation.port]
+            evidence_ids = list(dict.fromkeys([observation.evidence_id, *(ref.evidence_id for item in related for ref in item.evidence)]))
+            related_ids = {item.id for item in related}
+            risk_row = next((row for row in ranked if row.finding.id in related_ids), None)
+            risk_factors = (
+                [
+                    f"{factor.name}={factor.value} ({factor.source})"
+                    for factor in risk_row.factors
+                    if factor.included
+                ]
+                if risk_row
+                else ["No matching vulnerability finding; risk score is not assigned."]
             )
-            candidate = PlannerCandidate(
-                action=action,
-                candidate_id="pending",
-                observed_evidence_ids=[observation.evidence_id],
-                planner_reason=f"Open web service observed on {observation.ip}:{observation.port}; a Burp XML import can add web findings.",
-                exposure_state="live-observed" if observation.source_mode == "live" else "imported",
-                exposure_evidence_id=observation.evidence_id,
+            common = {
+                "candidate_id": "pending",
+                "observed_evidence_ids": evidence_ids,
+                "risk_score": risk_row.priority_score if risk_row else None,
+                "risk_factors": risk_factors,
+                "related_finding_ids": [item.id for item in related],
+                "exposure_state": "live-observed" if observation.source_mode == "live" else "imported",
+                "exposure_evidence_id": observation.evidence_id,
+            }
+
+            options: list[tuple[ActionName, str, str, dict[str, Any]]] = []
+            if observation.source_mode == "imported" and ActionName.NMAP_SCAN in available_actions:
+                options.append((
+                    ActionName.NMAP_SCAN,
+                    "Imported open-port evidence may be stale; a one-port live TCP connect recheck can confirm current exposure.",
+                    "A live Nmap service observation for this one scoped port, or a recorded safe failure.",
+                    {"service_detection": False, "skip_host_discovery": True, "timing": 2, "host_timeout_seconds": 30},
+                ))
+            if ActionName.IMPORT_BURP in available_actions and not any(
+                "burp" in source.casefold() for item in related for source in item.source_tools
+            ):
+                options.append((
+                    ActionName.IMPORT_BURP,
+                    "An open web endpoint has no matching Burp finding evidence; an existing Burp export may add application-layer detail.",
+                    "Normalized Burp issues with their imported evidence references, if the supplied export contains this endpoint.",
+                    {},
+                ))
+            if (
+                ActionName.IMPORT_NESSUS in available_actions
+                and observation.ip not in host_nessus_candidate
+                and not any(
+                    "nessus" in source.casefold() and item.asset.ip == observation.ip
+                    for item in findings for source in item.source_tools
+                )
+            ):
+                options.append((
+                    ActionName.IMPORT_NESSUS,
+                    "No Nessus findings are recorded for this host; an existing Nessus export may add infrastructure vulnerability results.",
+                    "Normalized Nessus findings for this host, if present in the supplied export.",
+                    {},
+                ))
+                host_nessus_candidate.add(observation.ip)
+            if ActionName.IMPORT_NIKTO in available_actions and not any(
+                "nikto" in source.casefold() for item in related for source in item.source_tools
+            ):
+                options.append((
+                    ActionName.IMPORT_NIKTO,
+                    "An open web endpoint has no matching Nikto scan; an existing Nikto report can add web server misconfiguration checks.",
+                    "Normalized Nikto findings with source evidence references, if present in the supplied report.",
+                    {},
+                ))
+            if ActionName.IMPORT_ZAP in available_actions and not any(
+                "zap" in source.casefold() for item in related for source in item.source_tools
+            ):
+                options.append((
+                    ActionName.IMPORT_ZAP,
+                    "An open web endpoint has no matching OWASP ZAP finding evidence; an existing ZAP export can provide web app vulnerability coverage.",
+                    "Normalized OWASP ZAP alerts with source evidence references, if present in the supplied report.",
+                    {},
+                ))
+            if (
+                ActionName.IMPORT_OPENVAS in available_actions
+                and observation.ip not in host_openvas_candidate
+                and not any(
+                    "openvas" in source.casefold() and item.asset.ip == observation.ip
+                    for item in findings for source in item.source_tools
+                )
+            ):
+                options.append((
+                    ActionName.IMPORT_OPENVAS,
+                    "No OpenVAS / Greenbone findings are recorded for this host; an existing OpenVAS report can add infrastructure vulnerability coverage.",
+                    "Normalized OpenVAS findings for this host, if present in the supplied export.",
+                    {},
+                ))
+                host_openvas_candidate.add(observation.ip)
+            if (
+                ActionName.IMPORT_METASPLOIT in available_actions
+                and any(
+                    getattr(item, "exploit_available", False) or (item.cvss or 0.0) >= 7.0 or item.severity in {"critical", "high"}
+                    for item in related
+                )
+                and not any(
+                    "metasploit" in source.casefold() for item in related for source in item.source_tools
+                )
+            ):
+                options.append((
+                    ActionName.IMPORT_METASPLOIT,
+                    "A high-severity or exploitable finding exists for this endpoint; a lab-controlled Metasploit report can provide validation evidence.",
+                    "Normalized Metasploit validation findings with human-approval and audit traceability.",
+                    {},
+                ))
+
+            for action_name, reason, expected, arguments in options:
+                action = Action(
+                    id="plan-" + hashlib.sha256(f"{action_name.value}|{observation.ip}|{observation.port}".encode()).hexdigest()[:16],
+                    name=action_name,
+                    target=observation.ip,
+                    ports=[observation.port],
+                    arguments=arguments,
+                    engagement_id=engagement_id,
+                    requested_by="planner",
+                )
+                candidate = PlannerCandidate(
+                    action=action,
+                    planner_reason=reason,
+                    expected_result=expected,
+                    **common,
+                )
+                fingerprint = action_fingerprint(action)
+                if fingerprint in executed:
+                    skipped.append((candidate, "action fingerprint already executed for this target and ports"))
+                    continue
+                if fingerprint in seen:
+                    skipped.append((candidate, "duplicate observation has the same action fingerprint"))
+                    continue
+                seen.add(fingerprint)
+                planned.append(candidate)
+        priority = {
+            ActionName.NMAP_SCAN: 0,
+            ActionName.IMPORT_BURP: 1,
+            ActionName.IMPORT_NESSUS: 2,
+            ActionName.IMPORT_NIKTO: 3,
+            ActionName.IMPORT_ZAP: 4,
+            ActionName.IMPORT_OPENVAS: 5,
+            ActionName.IMPORT_METASPLOIT: 6,
+        }
+        planned.sort(
+            key=lambda item: (
+                priority.get(item.action.name, 9),
+                -(item.risk_score if item.risk_score is not None else -1),
+                item.action.target,
+                item.action.ports,
             )
-            fingerprint = action_fingerprint(action)
-            if fingerprint in executed:
-                skipped.append((candidate, "action fingerprint already executed for this target and ports"))
-                continue
-            if fingerprint in seen:
-                skipped.append((candidate, "duplicate observation has the same action fingerprint"))
-                continue
-            seen.add(fingerprint)
-            planned.append(candidate)
+        )
         planned = [item.model_copy(update={"candidate_id": f"C{index}"}) for index, item in enumerate(planned, 1)]
         skipped = [(item.model_copy(update={"candidate_id": f"S{index}"}), reason) for index, (item, reason) in enumerate(skipped, 1)]
         return planned, skipped
 
 
 def executed_fingerprints(audit: AuditLog) -> set[tuple[str, str, tuple[int, ...]]]:
+    executed_action_ids: set[str] = set()
+    execution_events = {
+        "nmap_result",
+        "active_validation_execution",
+        "burp_finding_imported",
+        "nessus_finding_imported",
+        "openvas_finding_imported",
+        "nikto_finding_imported",
+        "zap_finding_imported",
+        "metasploit_finding_imported",
+    }
+    for entry in audit.read_entries():
+        if entry.event_type in execution_events:
+            action_id = entry.details.get("action_id")
+            if action_id:
+                executed_action_ids.add(str(action_id))
     result: set[tuple[str, str, tuple[int, ...]]] = set()
     for entry in audit.read_entries():
         if entry.event_type != "scope_decision" or not entry.details.get("allowed"):
+            continue
+        # Proposal gating and approval also record an allowed scope decision. Those events
+        # queue a plan but do not mean its underlying tool/import was performed.
+        if str(entry.details.get("action_id", "")) not in executed_action_ids:
             continue
         try:
             action_name = str(entry.details["action"])
@@ -232,6 +417,8 @@ def build_untrusted_summary(observations: list[ServiceObservation], findings: li
             "service": clean(row.service),
             "product": clean(row.product),
             "version": clean(row.version),
+            "state": clean(row.state),
+            "source_mode": row.source_mode,
             "evidence_id": clean(row.evidence_id),
         }
         for row in observations[:_MAX_SUMMARY_ITEMS]
@@ -244,6 +431,9 @@ def build_untrusted_summary(observations: list[ServiceObservation], findings: li
                 "host": clean(finding.asset.ip) if isinstance(finding, BaseModel) else "",
                 "port": int(finding.port) if isinstance(finding, BaseModel) else 0,
                 "title": clean(finding.title) if isinstance(finding, BaseModel) else "",
+                "source_tools": [clean(source) for source in finding.source_tools[:5]] if isinstance(finding, BaseModel) else [],
+                "severity": clean(finding.severity) if isinstance(finding, BaseModel) else "",
+                "cvss": finding.cvss if isinstance(finding, BaseModel) else None,
                 "evidence_ids": [clean(ref.evidence_id) for ref in finding.evidence[:10]] if isinstance(finding, BaseModel) else [],
             }
         )
@@ -267,12 +457,47 @@ def _messages(summary: str, candidates: list[PlannerCandidate]) -> list[dict[str
         "Do not change candidate scope, approve active validation, or invent evidence IDs."
     )
     user = (
-        "Select one candidate_id and provide a short rationale. Every rationale.observed item "
-        "must cite exactly one evidence ID listed for the selected candidate and no other ID. "
-        "Use exactly one observed item. Keep inferred and why to one concise sentence each, "
-        "at most 16 words. Do not repeat evidence IDs or restate other candidates.\n"
+        "Compare the candidate actions using evidence provenance, missing tool coverage, risk score/factors, "
+        "and expected information value. Prefer a live one-port recheck when imported exposure may be stale; "
+        "for live exposure, prefer useful missing-source coverage. Avoid a step whose source is already present. "
+        "Treat each candidate's exposure_state as authoritative: do not describe imported evidence as live-observed. "
+        "You may describe a live recheck as the proposed operation when the evidence state is imported. "
+        "The rationale must follow the selected candidate's rationale_requirement and explain that action only: "
+        "an Nmap candidate is a one-port TCP connect recheck; Burp and Nessus candidates import existing exports and do not scan. "
+        "Select one candidate_id and provide a short rationale. rationale.observed must state a concrete fact in "
+        "plain words and cite exactly one evidence ID listed for the selected candidate; never return only an ID. "
+        "Use exactly one observed item. Keep inferred and why "
+        "to one concise sentence each, at most 16 words. Do not repeat evidence IDs or mention another candidate ID.\n"
         "UNTRUSTED_SCANNER_DATA_BEGIN\n" + summary + "\nUNTRUSTED_SCANNER_DATA_END\n"
-        "CANDIDATES_JSON:\n" + json.dumps([{"candidate_id": c.candidate_id, "target": c.action.target, "port": c.action.ports[0], "exposure_state": c.exposure_state, "exposure_evidence_id": c.exposure_evidence_id, "evidence_ids": c.observed_evidence_ids, "planner_reason": c.planner_reason} for c in candidates], ensure_ascii=True)
+        "CANDIDATES_JSON:\n" + json.dumps(
+            [
+                {
+                    "candidate_id": c.candidate_id,
+                    "action_type": c.action.name.value,
+                    "rationale_requirement": {
+                        ActionName.NMAP_SCAN: "Explain how a one-port Nmap TCP connect recheck adds current evidence.",
+                        ActionName.IMPORT_BURP: "Explain how an existing Burp import adds web issue coverage; do not call it a scan.",
+                        ActionName.IMPORT_NESSUS: "Explain how an existing Nessus import adds host-level finding coverage; do not call it a scan.",
+                        ActionName.IMPORT_OPENVAS: "Explain how an existing OpenVAS import adds infrastructure vulnerability coverage; do not call it a scan.",
+                        ActionName.IMPORT_NIKTO: "Explain how an existing Nikto import adds web server misconfiguration coverage; do not call it a scan.",
+                        ActionName.IMPORT_ZAP: "Explain how an existing OWASP ZAP import adds web app alert coverage; do not call it a scan.",
+                        ActionName.IMPORT_METASPLOIT: "Explain how an existing Metasploit report adds controlled validation evidence; do not call it an exploit.",
+                    }.get(c.action.name, "Explain the selected action's expected value."),
+                    "target": c.action.target,
+                    "ports": c.action.ports,
+                    "exposure_state": c.exposure_state,
+                    "exposure_evidence_id": c.exposure_evidence_id,
+                    "evidence_ids": c.observed_evidence_ids,
+                    "related_finding_ids": c.related_finding_ids,
+                    "risk_score": c.risk_score,
+                    "risk_factors": c.risk_factors,
+                    "planner_reason": c.planner_reason,
+                    "expected_result": c.expected_result,
+                }
+                for c in candidates
+            ],
+            ensure_ascii=True,
+        )
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -294,7 +519,7 @@ def propose_and_gate(
         return None, None, False
     summary, known_evidence = build_untrusted_summary(observations, findings)
     ledger_evidence = {path.stem for path in ledger.root.glob("EV-*.json")}
-    known_evidence &= ledger_evidence
+    known_evidence = (known_evidence | {evidence_id for candidate in candidates for evidence_id in candidate.observed_evidence_ids}) & ledger_evidence
     messages = _messages(summary, candidates)
     schema = CandidateSelection.model_json_schema()
     schema["properties"]["candidate_id"]["enum"] = [item.candidate_id for item in candidates]
@@ -315,11 +540,45 @@ def propose_and_gate(
             chosen = next((candidate for candidate in candidates if candidate.candidate_id == selected.candidate_id), None)
             if chosen is None:
                 raise ValueError("candidate_id is not in the supplied candidate enum")
-            cited = {evidence_id for line in selected.rationale.observed for evidence_id in _EVIDENCE_ID.findall(line)}
-            if any(not _EVIDENCE_ID.search(line) for line in selected.rationale.observed) or not cited.issubset(known_evidence):
+            if len(selected.rationale.observed) != 1:
+                raise ValueError("rationale must contain exactly one observed evidence claim")
+            cited_by_line = [_EVIDENCE_ID.findall(line) for line in selected.rationale.observed]
+            cited = {evidence_id for line_ids in cited_by_line for evidence_id in line_ids}
+            if any(len(line_ids) != 1 for line_ids in cited_by_line):
+                raise ValueError("each observed rationale item must cite exactly one evidence ID")
+            if any(len(re.sub(r"[^A-Za-z0-9]", "", _EVIDENCE_ID.sub("", line))) < 8 for line in selected.rationale.observed):
+                raise ValueError("observed rationale must state a fact in words, not only an evidence ID")
+            rationale_text = " ".join([*selected.rationale.observed, selected.rationale.inferred, selected.rationale.why])
+            named_candidates = set(re.findall(r"\bC\d+\b", rationale_text))
+            if named_candidates - {chosen.candidate_id}:
+                raise ValueError("rationale refers to a different candidate ID")
+            all_cited = set(_EVIDENCE_ID.findall(rationale_text))
+            if not all_cited.issubset(known_evidence):
                 raise ValueError("rationale observed claims must cite evidence IDs that exist in the ledger")
-            if not cited.intersection(chosen.observed_evidence_ids):
+            if not cited or not cited.issubset(set(chosen.observed_evidence_ids)) or not all_cited.issubset(set(chosen.observed_evidence_ids)):
                 raise ValueError("rationale must cite evidence relevant to the selected candidate")
+            rationale_lower = rationale_text.casefold()
+            if chosen.exposure_state == "imported" and re.search(
+                r"\b(?:live|currently)(?:\s+[a-z0-9-]+){0,2}\s+(?:port|service|observation|evidence|exposure)\b",
+                rationale_lower,
+            ):
+                raise ValueError("rationale contradicts imported exposure provenance")
+            if chosen.exposure_state == "live-observed" and re.search(
+                r"\bimported(?:\s+[a-z0-9-]+){0,2}\s+(?:port|service|observation|evidence|exposure)\b",
+                rationale_lower,
+            ):
+                raise ValueError("rationale contradicts live exposure provenance")
+            action_markers = {
+                ActionName.NMAP_SCAN: ("nmap", "recheck", "tcp connect"),
+                ActionName.IMPORT_BURP: ("burp", "application-layer", "web issue"),
+                ActionName.IMPORT_NESSUS: ("nessus", "infrastructure", "host coverage"),
+                ActionName.IMPORT_OPENVAS: ("openvas", "greenbone", "infrastructure", "vulnerability"),
+                ActionName.IMPORT_NIKTO: ("nikto", "web server", "configuration", "misconfiguration"),
+                ActionName.IMPORT_ZAP: ("zap", "owasp", "web app", "alert"),
+                ActionName.IMPORT_METASPLOIT: ("metasploit", "validation", "exploit", "proof"),
+            }
+            if not any(marker in rationale_lower for marker in action_markers.get(chosen.action.name, ())):
+                raise ValueError("rationale does not explain the selected action type")
             proposal = ProposedAction(action=chosen.action, rationale=selected.rationale, candidate_id=chosen.candidate_id)
             break
         except Exception as exc:
@@ -335,9 +594,9 @@ def propose_and_gate(
         proposal = ProposedAction(
             action=first.action,
             rationale=Rationale(
-                observed=[f"Open web observation supported by {evidence_id}." for evidence_id in first.observed_evidence_ids],
-                inferred="Inference: review or import Burp XML for the observed web endpoint.",
-                why="Deterministic fallback selected the first rule-based candidate after two invalid model responses.",
+                observed=[f"Evidence {evidence_id} supports this candidate context." for evidence_id in first.observed_evidence_ids[:2]],
+                inferred=("Inference: " + first.planner_reason)[:180],
+                why="Deterministic fallback selected the top rule-ranked candidate after invalid model output.",
             ),
             candidate_id=first.candidate_id,
         )

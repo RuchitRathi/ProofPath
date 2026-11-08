@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC fixture only. Values do not describe a real host or scanner output. -->
+<report id="synthetic-ov-01">
+  <report id="sub-01">
+    <results>
+      <result id="ov-res-001">
+        <name>Apache HTTP Server Traversal</name>
+        <host>10.10.1.5</host>
+        <port>80/tcp</port>
+        <threat>High</threat>
+        <severity>7.5</severity>
+        <description>Path traversal vulnerability found in Apache HTTP Server.</description>
+        <nvt oid="1.3.6.1.4.1.25623.1.0.999901">
+          <name>Apache Traversal Detection</name>
+          <cvss_base>7.5</cvss_base>
+          <cve>CVE-2021-41773</cve>
+          <cwe>CWE-22</cwe>
+          <solution>Upgrade to the latest Apache release.</solution>
+        </nvt>
+      </result>
+    </results>
+  </report>
+</report>
+

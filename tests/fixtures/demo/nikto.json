@@ -1,0 +1,15 @@
+{
+  "host": "10.20.0.10",
+  "ip": "10.20.0.10",
+  "port": 80,
+  "banner": "Apache/2.4.49 (Unix)",
+  "vulnerabilities": [
+    {
+      "id": "NIKTO-001",
+      "method": "GET",
+      "url": "/icons/README",
+      "msg": "Apache default file found via directory listing. Server banner exposes version details.",
+      "cwe": "CWE-200"
+    }
+  ]
+}

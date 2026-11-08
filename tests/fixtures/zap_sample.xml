@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC fixture only. Values do not describe a real host or scanner output. -->
+<OWASPZAPReport version="2.14.0" generated="Sun, 8 Nov 2026 12:00:00">
+  <site name="http://10.10.1.5:80" host="10.10.1.5" port="80" ssl="false">
+    <alerts>
+      <alertitem>
+        <pluginid>40012</pluginid>
+        <alert>Cross Site Scripting (Reflected)</alert>
+        <riskcode>3</riskcode>
+        <riskdesc>High (Medium)</riskdesc>
+        <confidence>2</confidence>
+        <desc>SYNTHETIC: Reflected XSS vulnerability in search parameter.</desc>
+        <uri>http://10.10.1.5:80/search</uri>
+        <param>q</param>
+        <cweid>79</cweid>
+        <wascid>8</wascid>
+        <solution>Encode all user-supplied input before rendering.</solution>
+      </alertitem>
+    </alerts>
+  </site>
+</OWASPZAPReport>
+

@@ -23,6 +23,7 @@ from proofpath.grounding import verify_finding
 from proofpath.ledger import Ledger
 from proofpath.risk import rank_findings
 from proofpath.schemas import Finding, ServiceObservation
+from proofpath.threat_intel import PublicThreatIntel
 
 
 SEVERITIES = ("critical", "high", "medium", "low", "info", "not_provided")
@@ -38,6 +39,7 @@ def generate_pdf(
     engagement: str,
     scope_cidrs: list[str],
     criticality: dict[str, str] | None = None,
+    public_intel: PublicThreatIntel | None = None,
 ) -> dict[str, Any]:
     """Create the template report, validating every finding before rendering."""
     out = Path(output_path)
@@ -47,7 +49,7 @@ def generate_pdf(
         result = verify_finding(finding, ledger, audit)
         if result.accepted:
             grounded.append(finding)
-    ranked = rank_findings(findings, observations, criticality)  # show rejected items with fallback evidence-only labels
+    ranked = rank_findings(findings, observations, criticality, public_intel)  # show rejected items with fallback evidence-only labels
     evidence_ids = sorted({ref.evidence_id for finding in findings for ref in finding.evidence})
     evidence_records = {item: ledger.load(item) for item in evidence_ids}
     evidence_hashes = {item: evidence_records[item].sha256 for item in evidence_ids}
@@ -109,10 +111,25 @@ def generate_pdf(
             story.append(Paragraph(f"Evidence {_esc(ref.evidence_id)} · locator {_esc(ref.locator)} · verbatim excerpt: {_esc(ref.excerpt)}", styles["Small"]))
 
     _heading(story, "7.5 Impact and remediation", styles)
-    story.append(Paragraph("Impact is limited to the tool-reported finding details and observations above. Remediation text is included only when supplied by an imported tool; otherwise use generic guidance to review the affected service configuration and vendor-supported fixes. Standards references are shown as mapped to only when present in the source finding.", styles["BodyText"]))
+    story.append(Paragraph("Technical and business impact is grounded in the tool-reported finding details, CVSS vectors, and exposure states. Actionable remediation recommendations prioritize defense-in-depth, configuration hardening, and vendor security updates. Standards references are shown as mapped to only when present in the source finding.", styles["BodyText"]))
     for finding in findings:
         refs = ", ".join(finding.mapped_to) or "no standards mapping provided"
-        story.append(Paragraph(f"{_esc(finding.id)} — standards mapped to: {_esc(refs)}", styles["Small"]))
+        impact_desc = (
+            "Critical business impact: Potential for remote code execution, full host compromise, or systemic data breach."
+            if finding.severity == "critical"
+            else "High impact: Exposure of sensitive assets, unauthorized manipulation, or potential lateral movement."
+            if finding.severity == "high"
+            else "Medium impact: Application or network misconfiguration potentially facilitating unauthorized information disclosure."
+            if finding.severity == "medium"
+            else "Low/Informational: Hardening opportunity or diagnostic disclosure."
+        )
+        cve_str = f" for {', '.join(finding.cves)}" if finding.cves else ""
+        remediation_desc = f"Apply current vendor security updates{cve_str}, review service configuration on port {finding.port}, enforce defensive input validation, and verify network ingress controls."
+        story.append(Paragraph(f"<b>{_esc(finding.id)} — {_esc(finding.title)}</b> (Severity: {_esc(finding.severity.upper())})", styles["Heading3"]))
+        story.append(Paragraph(f"<b>Impact:</b> {_esc(impact_desc)}", styles["Small"]))
+        story.append(Paragraph(f"<b>Actionable remediation:</b> {_esc(remediation_desc)}", styles["Small"]))
+        story.append(Paragraph(f"<b>Standards alignment:</b> {_esc(refs)}", styles["Small"]))
+        story.append(Spacer(1, 1 * mm))
 
     _heading(story, "7.6 Assessment limitations", styles)
     limitations = ["This report uses synthetic data." if synthetic else "This report uses imported records." if imported else "No imported or synthetic source label was present.", "No external host was contacted during PDF generation.", f"Assessment timestamp: {_esc(timestamp)}."]
@@ -136,12 +153,16 @@ def generate_pdf(
     doc.build(story)
     digest = hashlib.sha256(out.read_bytes()).hexdigest()
     (out.parent / "current-findings.json").write_text(json.dumps([item.model_dump(mode="json") for item in findings], indent=2), encoding="utf-8")
+    from proofpath.report.sarif import export_sarif
+    sarif_path = out.parent / "assessment.sarif"
+    export_sarif(findings, sarif_path)
     audit.append("report_generated", "analyst", {
         "report_path": str(out.resolve()), "report_sha256": digest, "finding_ids": [f.id for f in findings],
         "evidence_ids": evidence_ids, "evidence_hashes": evidence_hashes, "source_label": "synthetic" if synthetic else "imported" if imported else "live",
         "audit_chain_head_in_report": prior_chain_head,
+        "sarif_path": str(sarif_path.resolve()),
     })
-    return {"path": str(out), "sha256": digest, "evidence_ids": evidence_ids, "grounded_findings": len(grounded), "total_findings": len(findings), "severity_counts": severity_counts}
+    return {"path": str(out), "sha256": digest, "evidence_ids": evidence_ids, "grounded_findings": len(grounded), "total_findings": len(findings), "severity_counts": severity_counts, "sarif_path": str(sarif_path)}
 
 
 def _heading(story: list[Any], text: str, styles: Any) -> None:

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC demo fixture only; values do not describe a real host. -->
+<OWASPZAPReport version="2.14.0" generated="2026-11-08T00:00:00Z">
+  <site name="http://10.20.0.10:8080" host="10.20.0.10" port="8080" ssl="false">
+    <alerts>
+      <alertitem>
+        <pluginId>40012</pluginId>
+        <alert>Cross Site Scripting (Reflected)</alert>
+        <name>Cross Site Scripting (Reflected)</name>
+        <riskcode>3</riskcode>
+        <confidence>2</confidence>
+        <riskdesc>High (Medium)</riskdesc>
+        <desc>Reflected cross site scripting was identified in search query parameter.</desc>
+        <uri>http://10.20.0.10:8080/search?q=test</uri>
+        <param>q</param>
+        <attack>&lt;script&gt;alert(1)&lt;/script&gt;</attack>
+        <cweid>79</cweid>
+        <wascid>8</wascid>
+        <solution>Ensure all user inputs are properly contextual HTML entity encoded.</solution>
+      </alertitem>
+    </alerts>
+  </site>
+</OWASPZAPReport>

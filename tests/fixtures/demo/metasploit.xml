@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC demo fixture only; values do not describe a real host. -->
+<MetasploitExpressV4>
+  <hosts>
+    <host>
+      <address>10.20.0.10</address>
+      <vulns>
+        <vuln>
+          <name>Apache 2.4.49/2.4.50 Path Traversal Lab Validation</name>
+          <info>Controlled non-destructive lab validation confirmed Apache path traversal vulnerability response.</info>
+          <port>80</port>
+          <proto>tcp</proto>
+          <refs>
+            <ref>CVE-2021-41773</ref>
+            <ref>CWE-22</ref>
+          </refs>
+        </vuln>
+      </vulns>
+    </host>
+  </hosts>
+</MetasploitExpressV4>

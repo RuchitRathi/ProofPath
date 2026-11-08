@@ -1,0 +1,16 @@
+{
+  "host": "10.10.1.5",
+  "ip": "10.10.1.5",
+  "port": 80,
+  "banner": "Apache/2.4.49",
+  "vulnerabilities": [
+    {
+      "id": "999901",
+      "OSVDB": "0",
+      "method": "GET",
+      "url": "/admin",
+      "msg": "SYNTHETIC: /admin directory found without authentication. CWE-200 information disclosure."
+    }
+  ]
+}
+

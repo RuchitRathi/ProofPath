@@ -1,0 +1,32 @@
+# Disposable local test scope. Never use this file for an external target.
+engagement: proofpath-local-lab
+allowed_cidrs:
+  - 127.0.0.1/32
+excluded_cidrs: []
+excluded_hosts: []
+allowed_ports:
+  - "8080"
+allow_loopback: true
+rate_limits:
+  max_timing: 1
+  max_host_timeout_seconds: 20
+enabled_actions:
+  - nmap_scan
+  - import_burp
+allowed_validation_paths: []
+tool_arguments:
+  nmap:
+    service_detection:
+      type: bool
+    skip_host_discovery:
+      type: bool
+    timing:
+      type: int
+      minimum: 0
+      maximum: 1
+    host_timeout_seconds:
+      type: int
+      minimum: 1
+      maximum: 20
+  nessus: {}
+  burp: {}

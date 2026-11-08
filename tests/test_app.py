@@ -125,8 +125,9 @@ def test_blank_ollama_tag_shows_rule_plan_fallback_and_logs(tmp_path: Path, monk
     assert "Proposer unavailable: deterministic top rule-ranked candidate shown" in warnings
     plan_text = "\n".join([*(item.value for item in app.markdown), *(item.value for item in app.text), *(item.value for item in app.caption)])
     assert "Decision trace (code generated)" in plan_text
-    assert "This action does not start a Burp scan." in plan_text
-    assert "Expected result: tool-reported web issues" in plan_text
+    assert "one-port Nmap TCP connect recheck" in plan_text
+    assert "Expected result: A live Nmap service observation" in plan_text
+    assert "Observed facts (code generated)" in plan_text
     assert not app.exception
     recent = AuditLog(audit_path).read_entries()[initial_count:]
     assert any(entry.event_type == "proposer_unavailable" for entry in recent)

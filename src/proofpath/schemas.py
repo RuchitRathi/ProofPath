@@ -1,6 +1,7 @@
 """Typed records for actions, evidence, findings, and audit entries.
 
-The model may emit an Action. It may not invent fields outside these models.
+The proposer returns a candidate ID and rationale. Application code builds the
+selected Action from a rule-generated candidate before the scope check.
 """
 
 from __future__ import annotations
@@ -22,6 +23,9 @@ class ActionName(str, Enum):
     IMPORT_NESSUS = "import_nessus"
     IMPORT_BURP = "import_burp"
     IMPORT_OPENVAS = "import_openvas"
+    IMPORT_NIKTO = "import_nikto"
+    IMPORT_ZAP = "import_zap"
+    IMPORT_METASPLOIT = "import_metasploit"
     IMPORT_NMAP_XML = "import_nmap_xml"
     REQUEST_APPROVAL = "request_approval"
     ACTIVE_VALIDATE = "active_validate"

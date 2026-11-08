@@ -46,7 +46,7 @@ for i in range(5):
   n=import_nessus_xml(raws['nessus.nessus'],guard,audit,ledger); b=import_burp_xml(raws['burp.xml'],guard,audit,ledger)
   ne=ledger.store(content=raws['nmap.xml'],tool='nmap',command=['import_nmap_xml'],status='ok',summary='synthetic nmap demo',source_mode='imported')
   obs=parse_nmap_xml(raws['nmap.xml'],ne.id); findings=correlate_findings([*n.findings,*b.findings],obs)
-  start=time.perf_counter(); candidates=RulePlanner().candidates(obs,guard.policy.engagement)
+  start=time.perf_counter(); candidates=RulePlanner().candidates(obs,guard.policy.engagement,findings=findings,enabled_actions=set(guard.policy.enabled_actions))
   proposal,result,fallback=propose_and_gate(obs,candidates,client,guard,audit,ledger,findings=findings); elapsed=time.perf_counter()-start
   text=json.dumps(proposal.model_dump(mode='json')) if proposal else ''; fake,claims=claim_counts(text)
   if proposal:

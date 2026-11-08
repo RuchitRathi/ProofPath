@@ -136,7 +136,11 @@ def run_injection_redteam(scope_path: str | Path) -> tuple[bool, str]:
             def complete(self, _messages: list[dict[str, str]], _schema: dict[str, object]) -> str:
                 return CandidateSelection(
                     candidate_id="C1",
-                    rationale=Rationale(observed=["EV-0001 reports the synthetic service."], inferred="Inference: test payload.", why="Redteam stub."),
+                    rationale=Rationale(
+                        observed=["EV-0001 reports the synthetic web service."],
+                        inferred="Inference: a Burp import may add web issue details.",
+                        why="No matching Burp evidence is recorded for this endpoint.",
+                    ),
                 ).model_dump_json()
 
         temp_root = root / ".pytest-tmp"

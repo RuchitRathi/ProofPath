@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC fixture only. Values do not describe a real host or scanner output. -->
+<MetasploitExpressV4>
+  <hosts>
+    <host>
+      <address>10.10.1.5</address>
+      <services>
+        <service>
+          <port>80</port>
+          <proto>tcp</proto>
+          <name>http</name>
+          <state>open</state>
+        </service>
+      </services>
+      <vulns>
+        <vuln>
+          <name>Apache Path Traversal Validation</name>
+          <info>SYNTHETIC: Validated proof-of-concept traversal via auxiliary/scanner/http/apache_normalize_path.</info>
+          <refs>
+            <ref>CVE-2021-41773</ref>
+            <ref>CWE-22</ref>
+          </refs>
+        </vuln>
+      </vulns>
+    </host>
+  </hosts>
+</MetasploitExpressV4>
+
