@@ -42,6 +42,12 @@ def main(argv: list[str] | None = None) -> int:
     demo.add_argument("--scope", default="scope.demo.yaml")
     demo.add_argument("--data", default="data/demo")
     demo.add_argument("--all-tools", action="store_true", help="import all 7 tool reports (Nmap, Nessus, Burp, OpenVAS, Nikto, ZAP, Metasploit)")
+    agent_cmd = sub.add_parser("agent-run", help="run the autonomous VAPT agent on the demo dataset")
+    agent_cmd.add_argument("--scope", default="scope.demo.yaml")
+    agent_cmd.add_argument("--data", default="data/agent")
+    agent_cmd.add_argument("--max-steps", type=int, default=15)
+    agent_cmd.add_argument("--auto-nmap", action="store_true", help="auto-execute Nmap scans")
+    agent_cmd.add_argument("--all-tools", action="store_true", help="import all 7 tool reports before agent run")
     args = parser.parse_args(argv)
     if args.command == "verify":
         path = Path(args.audit)
@@ -168,6 +174,96 @@ def main(argv: list[str] | None = None) -> int:
         data.mkdir(parents=True, exist_ok=True)
         (data / "current-findings.json").write_text(json.dumps([f.model_dump(mode="json") for f in findings], indent=2), encoding="utf-8")
         print(json.dumps(result, indent=2))
+        return 0
+    if args.command == "agent-run":
+        from proofpath.agent import AgentConfig, VAPTAgent
+        from proofpath.selftest import demo_resolver
+        from proofpath.adapters.openvas_import import import_openvas_xml
+        from proofpath.adapters.nikto_import import import_nikto_report
+        from proofpath.adapters.zap_import import import_zap_report
+        from proofpath.adapters.metasploit_import import import_metasploit_report
+
+        scope = Path(args.scope)
+        data = Path(args.data)
+        data.mkdir(parents=True, exist_ok=True)
+        guard = ScopeGuard.from_yaml(scope, resolver=demo_resolver)
+        audit = AuditLog(data / "audit.jsonl")
+        ledger = Ledger(data / "evidence")
+        fixture = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "demo"
+
+        # Phase 1: Import base data to seed the agent
+        action = __import__("proofpath.schemas", fromlist=["Action", "ActionName"])
+        nmap_raw = (fixture / "nmap.xml").read_bytes()
+        request = action.Action(
+            id="demo-import-nmap",
+            name=action.ActionName.IMPORT_NMAP_XML,
+            target="10.20.0.10",
+            ports=[80],
+            engagement_id=guard.policy.engagement,
+            requested_by="demo-loader",
+        )
+        nmap_result = execute_action(request, guard, audit, ledger, {action.ActionName.IMPORT_NMAP_XML: RecordedNmapXMLAdapter(nmap_raw)})
+        observations = normalize_nmap_observations(nmap_result.services)
+        all_raw_findings: list = []
+
+        nessus = import_nessus_xml((fixture / "nessus.nessus").read_bytes(), guard, audit, ledger, actor="demo-loader")
+        burp = import_burp_xml((fixture / "burp.xml").read_bytes(), guard, audit, ledger, actor="demo-loader")
+        all_raw_findings.extend(nessus.findings)
+        all_raw_findings.extend(burp.findings)
+
+        if getattr(args, "all_tools", False):
+            if (fixture / "openvas.xml").is_file():
+                ov = import_openvas_xml((fixture / "openvas.xml").read_bytes(), guard, audit, ledger, actor="demo-loader")
+                all_raw_findings.extend(ov.findings)
+            if (fixture / "nikto.json").is_file():
+                nk = import_nikto_report((fixture / "nikto.json").read_bytes(), guard, audit, ledger, actor="demo-loader")
+                all_raw_findings.extend(nk.findings)
+            if (fixture / "zap.xml").is_file():
+                zp = import_zap_report((fixture / "zap.xml").read_bytes(), guard, audit, ledger, actor="demo-loader")
+                all_raw_findings.extend(zp.findings)
+            if (fixture / "metasploit.xml").is_file():
+                ms = import_metasploit_report((fixture / "metasploit.xml").read_bytes(), guard, audit, ledger, actor="demo-loader")
+                all_raw_findings.extend(ms.findings)
+
+        # Phase 2: Configure and run the agent
+        client = None
+        try:
+            client = OllamaClient(OllamaConfig.from_yaml("ollama.yaml"))
+        except Exception:
+            pass
+
+        agent_config = AgentConfig(
+            max_steps=args.max_steps,
+            auto_execute_nmap=getattr(args, "auto_nmap", False),
+            pause_for_imports=True,
+            model_client=client,
+        )
+        agent = VAPTAgent(guard, audit, ledger, {}, agent_config)
+        agent.load_state(observations=observations, findings=all_raw_findings)
+
+        print(f"Agent starting: {len(observations)} observations, {len(all_raw_findings)} raw findings")
+        agent_result = agent.run()
+
+        # Phase 3: Output results
+        print(f"\nAgent completed: status={agent_result.status}, steps={len(agent_result.steps)}, "
+              f"observations={agent_result.total_observations}, findings={agent_result.total_findings}, "
+              f"duration={agent_result.duration_seconds:.1f}s")
+        if agent_result.plan:
+            print(f"\nPlan: {agent_result.plan.reasoning}")
+        for step in agent_result.steps:
+            icon = {"observe": "🔍", "think": "🧠", "act": "⚡", "reflect": "💭",
+                    "import_request": "📥", "complete": "✅", "error": "❌"}.get(step.step_type.value, "•")
+            action_info = f" {step.action_name}" if step.action_name else ""
+            target_info = f" {step.target}" if step.target else ""
+            print(f"  {icon} Step {step.step_number} [{step.step_type.value}]{action_info}{target_info}: {step.reasoning[:120]}")
+        if agent_result.import_requests:
+            print(f"\nPending import requests ({len(agent_result.import_requests)}):")
+            for req in agent_result.import_requests:
+                print(f"  📄 {req.tool} for {req.target}:{','.join(str(p) for p in req.ports)} — {req.reason[:80]}")
+
+        # Save agent trace
+        (data / "agent-trace.json").write_text(agent_result.model_dump_json(indent=2), encoding="utf-8")
+        print(f"\nAgent trace saved to {data / 'agent-trace.json'}")
         return 0
     scope = Path(args.scope)
     if not scope.is_file():

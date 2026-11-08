@@ -28,6 +28,7 @@ from proofpath.adapters.openvas_import import import_openvas_xml
 from proofpath.adapters.nikto_import import import_nikto_report
 from proofpath.adapters.zap_import import import_zap_report
 from proofpath.adapters.metasploit_import import import_metasploit_report
+from proofpath.agent import AgentConfig, AgentResult, ImportRequest, StepType, VAPTAgent
 from proofpath.assistant import SecurityAssistant
 from proofpath.report.sarif import export_sarif
 from proofpath.diff import compare_assessments
@@ -211,6 +212,10 @@ if "public_threat_intel" not in st.session_state:
     except Exception as exc:
         st.session_state.public_threat_intel = None
         st.session_state.public_threat_intel_error = str(exc)[:300]
+if "agent_result" not in st.session_state:
+    st.session_state.agent_result = None
+if "agent_running" not in st.session_state:
+    st.session_state.agent_running = False
 
 model_configured = False
 try:
@@ -278,7 +283,7 @@ for label, num in stages:
 stepper_html += '</div>'
 st.markdown(stepper_html, unsafe_allow_html=True)
 
-tabs = st.tabs(["Assess", "Findings", "Plan", "Imports", "Risk", "Approvals", "Report", "Assistant"])
+tabs = st.tabs(["Assess", "Findings", "Plan", "Imports", "Risk", "Approvals", "Report", "Assistant", "Agent"])
 
 with tabs[0]:
     st.subheader("Assess a target")
@@ -883,3 +888,148 @@ with tabs[7]:
         with st.expander("Full Conversation Transcript"):
             for line in st.session_state.transcript:
                 st.text(line)
+
+with tabs[8]:
+    st.subheader("Autonomous VAPT Agent")
+    st.caption(
+        "ReAct-style agentic orchestrator that autonomously plans, executes, and reflects on "
+        "assessment steps. Every tool invocation passes through the Scope Guard choke point. "
+        "Import-only tools pause for analyst-supplied reports."
+    )
+
+    # Agent configuration
+    with st.expander("Agent Configuration", expanded=not st.session_state.agent_result):
+        agent_col1, agent_col2 = st.columns(2)
+        with agent_col1:
+            max_steps = st.slider("Maximum agent steps", min_value=1, max_value=50, value=15, key="agent_max_steps")
+            auto_nmap = st.checkbox("Auto-execute Nmap scans", value=False, key="agent_auto_nmap",
+                                    help="When enabled, the agent will automatically run live Nmap scans through WSL. Disable to treat Nmap as import-only.")
+        with agent_col2:
+            pause_imports = st.checkbox("Pause for import requests", value=True, key="agent_pause_imports",
+                                        help="When enabled, import-only tools request analyst files instead of being skipped.")
+
+    # Run agent button
+    if st.button("🤖 Start Autonomous Assessment", key="btn_run_agent", type="primary"):
+        with st.spinner("Agent is running the ReAct assessment loop..."):
+            try:
+                client = None
+                try:
+                    m_cfg = OllamaConfig.from_yaml(OLLAMA_CONFIG_PATH)
+                    if m_cfg.model_tag.strip():
+                        client = OllamaClient(m_cfg)
+                except Exception:
+                    pass
+
+                agent_config = AgentConfig(
+                    max_steps=max_steps,
+                    auto_execute_nmap=auto_nmap,
+                    pause_for_imports=pause_imports,
+                    model_client=client,
+                    public_intel=st.session_state.public_threat_intel,
+                    criticality=st.session_state.criticality_by_asset,
+                )
+
+                agent = VAPTAgent(
+                    GUARD, AUDIT, LEDGER, NMAP_ADAPTERS, agent_config,
+                )
+
+                # Load current session state into agent
+                agent.load_state(
+                    observations=st.session_state.observations,
+                    findings=st.session_state.raw_findings,
+                )
+
+                result = agent.run()
+                st.session_state.agent_result = result
+
+                # Sync agent state back to session
+                st.session_state.observations = agent.observations
+                st.session_state.raw_findings = agent.raw_findings
+
+                st.success(f"Agent completed with status: **{result.status}** · {len(result.steps)} steps · {result.duration_seconds:.1f}s")
+            except Exception as exc:
+                st.error(f"Agent error: {exc}")
+
+    # Display agent results
+    agent_result = st.session_state.agent_result
+    if agent_result is not None:
+        # Summary metrics
+        st.markdown("---")
+        st.markdown("### Agent Run Summary")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Status", agent_result.status.replace("_", " ").title())
+        m2.metric("Steps Taken", len(agent_result.steps))
+        m3.metric("Observations", agent_result.total_observations)
+        m4.metric("Findings", agent_result.total_findings)
+
+        m5, m6, m7, m8 = st.columns(4)
+        m5.metric("Candidates Evaluated", agent_result.total_candidates_evaluated)
+        m6.metric("Import Requests", len(agent_result.import_requests))
+        m7.metric("Duration", f"{agent_result.duration_seconds:.1f}s")
+        m8.metric("Run ID", agent_result.run_id[:8])
+
+        # Assessment plan
+        if agent_result.plan:
+            with st.expander("📋 Assessment Plan", expanded=True):
+                st.write(agent_result.plan.reasoning)
+                if agent_result.plan.targets:
+                    st.caption("Targets: " + ", ".join(agent_result.plan.targets))
+                if agent_result.plan.planned_actions:
+                    st.caption("Planned actions: " + ", ".join(agent_result.plan.planned_actions))
+
+        # Step-by-step execution trace
+        with st.expander("🔄 ReAct Execution Trace", expanded=True):
+            for step in agent_result.steps:
+                icon = {
+                    StepType.OBSERVE: "🔍",
+                    StepType.THINK: "🧠",
+                    StepType.ACT: "⚡",
+                    StepType.REFLECT: "💭",
+                    StepType.IMPORT_REQUEST: "📥",
+                    StepType.COMPLETE: "✅",
+                    StepType.ERROR: "❌",
+                }.get(step.step_type, "•")
+
+                step_label = f"{icon} Step {step.step_number} — **{step.step_type.value.upper()}**"
+                if step.action_name:
+                    step_label += f" · `{step.action_name}`"
+                if step.target:
+                    step_label += f" · {step.target}"
+                if step.ports:
+                    step_label += f":{','.join(str(p) for p in step.ports)}"
+
+                st.markdown(step_label)
+                st.caption(step.reasoning)
+
+                if step.decision_allowed is not None:
+                    scope_status = "✅ Allowed" if step.decision_allowed else "❌ Denied"
+                    st.caption(f"Scope: {scope_status} · {step.decision_reason or ''}")
+                if step.evidence_id:
+                    st.caption(f"Evidence: `{step.evidence_id}` · Status: {step.tool_status}")
+                if step.observations_added:
+                    st.caption(f"New observations: {step.observations_added}")
+                if step.duration_ms > 0:
+                    st.caption(f"Duration: {step.duration_ms:.0f} ms")
+
+                st.markdown("---")
+
+        # Pending import requests
+        if agent_result.import_requests:
+            st.markdown("### 📥 Pending Import Requests")
+            st.info("The agent needs the following tool reports to continue the assessment. Supply them in the **Imports** tab.")
+            for req in agent_result.import_requests:
+                with st.expander(f"📄 {req.tool} — {req.target}:{','.join(str(p) for p in req.ports)}"):
+                    st.write(f"**Tool:** {req.tool}")
+                    st.write(f"**Target:** {req.target}:{','.join(str(p) for p in req.ports)}")
+                    st.write(f"**Reason:** {req.reason}")
+                    st.write(f"**Expected Result:** {req.expected_result}")
+                    st.caption(f"Candidate ID: {req.candidate_id} · Action: {req.action_name}")
+
+        # Download agent trace
+        st.download_button(
+            "📥 Download Agent Trace JSON",
+            data=agent_result.model_dump_json(indent=2).encode("utf-8"),
+            file_name="proofpath-agent-trace.json",
+            mime="application/json",
+            key="download_agent_trace",
+        )
