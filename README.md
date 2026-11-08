@@ -17,12 +17,40 @@ Install Ubuntu WSL and Nmap separately, then confirm with `wsl --distribution Ub
 
 ## Run
 
+### Web Console (Streamlit)
 ```powershell
 python -m streamlit run app.py
-python -m pytest -q
+```
+
+### Terminal CLI Platform
+ProofPath features a full-featured terminal CLI (`proofpath`) providing headless access to all platform features:
+```powershell
+# Show tool capabilities matrix
+python -m proofpath.cli tools
+
+# Execute scoped live reconnaissance
+python -m proofpath.cli scan --target 192.168.56.1 --ports 80,443
+
+# Ingest scanner vulnerability reports
+python -m proofpath.cli import --tool nessus --file report.nessus
+
+# Inspect and correlate findings
+python -m proofpath.cli findings --data data
+
+# Compute multi-factor risk prioritization
+python -m proofpath.cli risk --data data
+
+# Generate executive PDF and OASIS SARIF v2.1.0 deliverables
+python -m proofpath.cli report --output assessment.pdf
+
+# Run the autonomous ReAct agent loop
+python -m proofpath.cli agent-run --all-tools
+
+# Cryptographic audit log & evidence verification
+python -m proofpath.cli verify --audit data/audit.jsonl --ledger data/evidence
+
+# Adversarial scope & safety regression suite (69 checks)
 python -m proofpath.cli redteam --scope scope.yaml
-python -m proofpath.cli demo-load --scope scope.demo.yaml --data data/demo
-python -m proofpath.cli verify --audit data\demo\audit.jsonl --ledger data\demo\evidence
 ```
 
 The demo dataset is explicitly synthetic. It exercises the same guarded import paths and does not scan a host. `scope.yaml` is a placeholder policy; replace it only with an engagement scope you are authorized to assess. Review exclusions and allowed ports before any live run. Do not treat a UI request as authorization.
