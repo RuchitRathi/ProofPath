@@ -12,7 +12,7 @@ The hackathon ask is a conversational agent that can walk that path and emit a c
 
 ProofPath's position: other agents ask you to trust the model. ProofPath lets you verify it.
 
-ProofPath implements full end-to-end coverage across the 8 VAPT lifecycle stages: Analyst Request, Agent Planning, Scan Orchestration, Result Ingestion, AI Analysis, Risk Prioritization, Human Review, and Unified VAPT Report.
+ProofPath implements full end-to-end coverage across the 8 VAPT lifecycle stages: Analyst Request, Agent Planning, Scan Orchestration, Result Ingestion, AI Analysis, Risk Prioritization, Human Review, and Unified VAPT Report. It exposes both a Streamlit web console and a standalone terminal CLI (`proofpath`) with rich tables for headless/terminal execution.
 
 All 7 named tools from the problem statement have dedicated adapters: live and imported Nmap, plus bounded, secure report importers for Nessus, Burp Suite, OpenVAS/Greenbone, Nikto, OWASP ZAP, and Metasploit. An interactive Conversational Security Assistant guides analysts through scope validation, tool selection, risk triage, and next steps. An Autonomous VAPT Agent (`src/proofpath/agent.py`) implements a ReAct-style planning, execution, and reflection loop powered by local Qwen and PydanticAI, orchestrating multi-step assessments within strict scope guard boundaries. Results are normalized into typed, evidence-backed findings and correlated deterministically. Active validation is strictly gated by independent human approval and scope authorization. Deliverables include deterministic ReportLab PDF reports, OASIS SARIF v2.1.0 exports, and retesting change comparison diffs.
 
