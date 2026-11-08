@@ -860,7 +860,14 @@ with tabs[7]:
     query = st.text_input("Ask the Security Assistant", placeholder="e.g. Assess 10.10.1.5 for web vulnerabilities, or check if 10.20.0.10 is in scope", key="conv_assistant_query")
     if st.button("Ask Assistant", key="btn_ask_assistant"):
         if query.strip():
-            assistant = SecurityAssistant(GUARD, AUDIT, LEDGER)
+            client = None
+            try:
+                m_cfg = OllamaConfig.from_yaml(OLLAMA_CONFIG_PATH)
+                if m_cfg.model_tag.strip():
+                    client = OllamaClient(m_cfg)
+            except Exception:
+                pass
+            assistant = SecurityAssistant(GUARD, AUDIT, LEDGER, model_client=client)
             reply = assistant.parse_request(query.strip(), st.session_state.observations, st.session_state.raw_findings)
             st.session_state.transcript.append(f"Analyst: {query.strip()}")
             st.session_state.transcript.append(f"Assistant: {reply.assistant_reply}")

@@ -78,3 +78,4 @@ def test_assistant_audits_conversation(tmp_path: Path) -> None:
     conv_entries = [e for e in entries if e.event_type == "analyst_conversation"]
     assert len(conv_entries) == 1
     assert conv_entries[0].details["intent"] == "reporting_inquiry"
+

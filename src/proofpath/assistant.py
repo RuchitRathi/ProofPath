@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from typing import Any
@@ -9,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from proofpath.audit import AuditLog
 from proofpath.ledger import Ledger
+from proofpath.proposer import ModelClient
 from proofpath.schemas import Action, ActionName, Finding, ServiceObservation
 from proofpath.scope_guard import ScopeGuard
 
@@ -46,10 +48,17 @@ class ParsedRequest(BaseModel):
 class SecurityAssistant:
     """Conversational security guide that evaluates intent, enforces scope, and plans VAPT stages."""
 
-    def __init__(self, guard: ScopeGuard, audit: AuditLog, ledger: Ledger) -> None:
+    def __init__(
+        self,
+        guard: ScopeGuard,
+        audit: AuditLog,
+        ledger: Ledger,
+        model_client: ModelClient | None = None,
+    ) -> None:
         self.guard = guard
         self.audit = audit
         self.ledger = ledger
+        self.model_client = model_client
 
     def parse_request(
         self,
@@ -196,6 +205,30 @@ class SecurityAssistant:
                 "'Check if 10.20.0.10 is in scope', or 'What should I investigate next?'). All actions are scope-guarded and hash-audited."
             )
 
+        # Grounded Qwen model recommendation if client configured
+        if self.model_client is not None:
+            try:
+                system_prompt = (
+                    "You are the ProofPath AI VAPT assistant. Ground your response in the provided scope decision. "
+                    "Never invent open ports, vulnerabilities, CVEs, or evidence. Respect scope boundaries strictly. "
+                    "Return a JSON object with a single 'recommendation' string of 1-2 sentences."
+                )
+                user_msg = (
+                    f"Analyst query: '{text_clean}'. "
+                    f"Target: '{target or 'unspecified'}'. Scope status: {'ALLOWED' if scope_allowed else 'DENIED' if scope_allowed is False else 'NOT_CHECKED'}. "
+                    f"Observations: {len(observations)}. Findings: {len(findings)}. "
+                    f"Provide a concise security recommendation."
+                )
+                raw_resp = self.model_client.complete(
+                    [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
+                    {"type": "object", "properties": {"recommendation": {"type": "string"}}, "required": ["recommendation"], "additionalProperties": False},
+                )
+                parsed_rec = json.loads(raw_resp).get("recommendation", "")
+                if parsed_rec:
+                    reply_lines.append(f"**Qwen AI Security Recommendation**: {parsed_rec}")
+            except Exception:
+                pass
+
         reply_text = "\n\n".join(reply_lines)
 
         parsed = ParsedRequest(
@@ -227,3 +260,4 @@ class SecurityAssistant:
         )
 
         return parsed
+
