@@ -167,11 +167,11 @@ def handle_scan(args: argparse.Namespace) -> int:
             tbl.add_column("State")
             tbl.add_column("Product / Version")
             for svc in res.services:
-                tbl.add_row(svc.asset.ip, str(svc.port), svc.protocol, svc.service or "", svc.state, f"{svc.product or ''} {svc.version or ''}".strip())
+                tbl.add_row(svc.ip, str(svc.port), svc.protocol, svc.service or "", svc.state, f"{svc.product or ''} {svc.version or ''}".strip())
             console.print(tbl)
         else:
             for svc in res.services:
-                print(f"  {svc.asset.ip}:{svc.port}/{svc.protocol} - {svc.service} ({svc.state}) {svc.product or ''} {svc.version or ''}".strip())
+                print(f"  {svc.ip}:{svc.port}/{svc.protocol} - {svc.service} ({svc.state}) {svc.product or ''} {svc.version or ''}".strip())
     else:
         _print("[yellow]No active services discovered for the given target and ports.[/yellow]")
 
