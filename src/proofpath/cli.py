@@ -698,8 +698,6 @@ def main(argv: list[str] | None = None) -> int:
         agent_config = AgentConfig(
             max_steps=args.max_steps,
             auto_execute_nmap=args.auto_nmap,
-            require_human_approval_for_active=True,
-            engagement_id=guard.policy.engagement,
         )
         agent = VAPTAgent(guard, audit, ledger, {}, agent_config)
         agent.load_state(observations=observations, findings=all_raw_findings)
