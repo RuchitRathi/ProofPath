@@ -715,13 +715,14 @@ with tabs[4]:
         for i, asset in enumerate(assets):
             col = crit_cols[i % len(crit_cols)]
             prev = st.session_state.criticality_by_asset.get(asset, "medium")
-            sel = col.selectbox(f"Asset: {asset}", ["low", "medium", "high"], index=["low", "medium", "high"].index(prev), key="crit_" + asset)
+            sel = col.selectbox(f"Asset criticality ({asset})", ["low", "medium", "high"], index=["low", "medium", "high"].index(prev), key="crit_" + asset)
             if sel != prev:
                 st.session_state.criticality_by_asset[asset] = sel
                 AUDIT.append("asset_criticality_changed", "analyst", {"asset": asset, "old": prev, "new": sel})
 
         ranked = rank_findings(findings, st.session_state.observations, st.session_state.criticality_by_asset, public_intel)
         if ranked:
+            st.caption(f"Risk table rendered · {len(ranked)} ranked finding(s)")
             rows = []
             for item in ranked:
                 factor_text = "; ".join(f"{factor.name}={factor.value} ({factor.source})" for factor in item.factors if factor.included)
@@ -753,14 +754,14 @@ with tabs[5]:
         with st.form("approval_request_form"):
             c_r1, c_r2, c_r3 = st.columns(3)
             with c_r1:
-                requester = st.text_input("Lead Pentester Identity", value="lead-assessor")
+                requester = st.text_input("Requester identity", value="analyst")
             with c_r2:
                 method = st.selectbox("HTTP Method", ["GET", "HEAD"])
             with c_r3:
                 path_options = GUARD.policy.allowed_validation_paths or ["/"]
                 path = st.selectbox("Allowlisted URI Path", path_options)
-            justification = st.text_input("Validation Rationale", value="Confirm non-destructive web endpoint accessibility and service state")
-            request_submitted = st.form_submit_button("Submit Authorization Request", type="primary")
+            justification = st.text_input("Reason for this non-destructive check", value="Confirm the local test service")
+            request_submitted = st.form_submit_button("Request approval", type="primary")
 
         if request_submitted:
             try:
@@ -776,14 +777,14 @@ with tabs[5]:
             except Exception as exc:
                 st.error("Authorization error: " + str(exc))
 
-    approver = st.text_input("Authorizing Lead Identity", value="engagement-director", key="approval_approver")
+    approver = st.text_input("Approver identity", value="engagement-director", key="approval_approver")
     for approval_id, record in list(st.session_state.approval_records.items()):
         approval = record["request"]
         action = record["action"]
         st.markdown(f"**Request [{approval.id[:8]}]**: `{action.arguments['method']} {action.target}:{action.ports[0]}{action.arguments['path']}` · Requested by: `{approval.requested_by}` · State: `{approval.state.value.upper()}`")
         if approval.state.value == "pending":
             col_a1, col_a2 = st.columns(2)
-            if col_a1.button("Authorize Verification Probe", key=f"app_{approval_id}", type="primary"):
+            if col_a1.button("Approve", key=f"app_{approval_id}", type="primary"):
                 try:
                     decided = decide_approval(approval, approver, approved=True)
                     record["request"] = decided
@@ -791,19 +792,24 @@ with tabs[5]:
                     st.rerun()
                 except ValueError as exc:
                     st.error(str(exc))
-            if col_a2.button("Deny Request", key=f"deny_{approval_id}"):
+            if col_a2.button("Deny", key=f"deny_{approval_id}"):
                 try:
                     decided = decide_approval(approval, approver, approved=False)
                     record["request"] = decided
                     AUDIT.append("approval_decision", approver, {"approval_id": approval.id, "action_id": action.id, "action_hash": approval.action_hash, "requested_by": approval.requested_by, "decided_by": approver, "state": decided.state.value})
+                    if decided.state.value == "denied":
+                        st.session_state.raw_findings = [item.model_copy(update={"validation_status": "rejected_by_human"}) if item.id == action.arguments["finding_id"] else item for item in st.session_state.raw_findings]
                     st.rerun()
                 except ValueError as exc:
                     st.error(str(exc))
         elif approval.state.value == "approved" and approval.used_at is None:
-            if st.button("Execute Authorized Probe Once", key="run_" + approval_id, type="primary"):
+            if st.button("Run approved request once", key="run_" + approval_id, type="primary"):
                 try:
                     result = execute_action(action, GUARD, AUDIT, LEDGER, {ActionName.ACTIVE_VALIDATE: ActiveValidationAdapter(action, approval)}, approval=approval)
                     record["request"] = approval.model_copy(update={"used_at": datetime.now(timezone.utc)})
+                    outcome = next((entry for entry in reversed(AUDIT.read_entries()) if entry.event_type == "active_validation_outcome" and entry.details.get("approval_id") == approval_id), None)
+                    if outcome and outcome.details.get("validation_status") == "validated_approved":
+                        st.session_state.raw_findings = [item.model_copy(update={"validation_status": "validated_approved"}) if item.id == action.arguments["finding_id"] else item for item in st.session_state.raw_findings]
                     st.success(f"Execution complete: {result.message}")
                     st.rerun()
                 except Exception as exc:
@@ -815,7 +821,7 @@ with tabs[5]:
 with tabs[6]:
     st.subheader("Executive & Technical Assessment Deliverables")
     findings = correlate_findings(st.session_state.raw_findings, st.session_state.observations)
-    if st.button("Generate Formal ReportLab PDF", disabled=not findings, type="primary"):
+    if st.button("Generate PDF report", disabled=not findings, type="primary"):
         try:
             report_dir = DATA_ROOT / "reports"
             report_dir.mkdir(parents=True, exist_ok=True)
@@ -833,7 +839,7 @@ with tabs[6]:
         st.markdown(f"**Cryptographic SHA-256 Digest**: `{st.session_state.report_hash}`")
         dl_c1, dl_c2 = st.columns(2)
         with dl_c1:
-            st.download_button("Download Formal PDF Report", data=Path(st.session_state.report_path).read_bytes(), file_name="proofpath-vapt-report.pdf", mime="application/pdf", use_container_width=True)
+            st.download_button("Download PDF report", data=Path(st.session_state.report_path).read_bytes(), file_name="proofpath-vapt-report.pdf", mime="application/pdf", use_container_width=True)
         with dl_c2:
             sarif_file = Path(st.session_state.get("sarif_path", ""))
             if sarif_file.is_file():
