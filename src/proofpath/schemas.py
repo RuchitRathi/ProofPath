@@ -18,6 +18,7 @@ class ActionName(str, Enum):
     """Closed action space. Unknown names never reach a tool."""
 
     NMAP_SCAN = "nmap_scan"
+    WEB_SCAN = "web_scan"
     NIKTO_SCAN = "nikto_scan"
     ZAP_SCAN = "zap_scan"
     IMPORT_NESSUS = "import_nessus"

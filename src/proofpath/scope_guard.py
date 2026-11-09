@@ -38,6 +38,7 @@ _BLOCKED_UNTIL_APPROVAL = {ActionName.ACTIVE_VALIDATE}
 _TOOL_FOR_ACTION = {
     ActionName.NMAP_SCAN: "nmap",
     ActionName.IMPORT_NMAP_XML: "nmap",
+    ActionName.WEB_SCAN: "webscan",
     ActionName.NIKTO_SCAN: "nikto",
     ActionName.ZAP_SCAN: "zap",
     ActionName.IMPORT_NESSUS: "nessus",
@@ -260,6 +261,42 @@ class ScopeGuard:
             action_id=action.id,
         )
         return self._sign(decision)
+
+    def enumerate_hosts(self, cidr: str, *, max_hosts: int = 256) -> tuple[list[str], str | None]:
+        """Turn one authorized CIDR into a concrete, bounded host list.
+
+        A sweep still authorizes each host individually through `check`; this
+        method only expands a range that is already inside the engagement. The
+        range must be small enough to iterate and, unless universal scope is on,
+        must sit inside an allowed range. Excluded hosts and ranges are removed
+        and IPv4 network/broadcast addresses are dropped. Returns
+        ``(hosts, None)`` or ``([], reason)`` when the sweep must not proceed.
+        """
+        try:
+            net = _require_bounded_network(cidr)
+        except ValueError as exc:
+            return [], str(exc)
+
+        contained = any(
+            net.version == allowed.version and net.subnet_of(allowed)
+            for allowed in self._allowed_nets
+        )
+        if not contained and not getattr(self.policy, "allow_all_ips", False):
+            return [], f"CIDR {cidr} is not inside an allowed range"
+        if net.num_addresses > max_hosts:
+            return [], (
+                f"CIDR {cidr} holds {net.num_addresses} addresses, "
+                f"above the {max_hosts}-host sweep cap"
+            )
+
+        hosts: list[str] = []
+        for ip in net:
+            if net.version == 4 and net.prefixlen < 31 and ip in {net.network_address, net.broadcast_address}:
+                continue
+            text = self._canonical_ip(ip)
+            if self._ip_reason(text) is None:
+                hosts.append(text)
+        return hosts, None
 
     def consume_approval(self, approval: ApprovalRequest, action: Action) -> bool:
         """Atomically consume a previously approved exact action once."""

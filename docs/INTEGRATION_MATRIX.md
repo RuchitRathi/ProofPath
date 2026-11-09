@@ -5,6 +5,7 @@ Statuses describe the code available in this build. **Live** means an executor e
 | Tool | Status | Verified behavior and limit |
 | --- | --- | --- |
 | Nmap | Live | Ubuntu WSL 7.98, explicit TCP connect (`-sT`); the verified scan targeted WSL's own 127.0.0.1 and found a closed port. Windows host-only/Docker reachability is unverified. |
+| ProofPath Web Scan | Live | Native standard-library GET probe on the guard's resolved IPs and allowlisted ports. Reads bounded response headers, cookie flags, and TLS negotiation into evidence-backed findings; no body, caller headers, or redirects. |
 | Nikto | Import-only | Imports bounded Nikto JSON or XML reports. Web configuration issues, sensitive paths, and headers are normalized with source evidence references. |
 | OWASP ZAP | Import-only | Imports bounded OWASP ZAP XML or JSON alert reports. Web application alerts, CWE/WASC classifications, and solutions are normalized with evidence references. |
 | Nessus | Import-only | Bounded `NessusClientData_v2` XML; only synthetic fixture tested. |

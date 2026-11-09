@@ -26,6 +26,9 @@ def _submit(target: str, monkeypatch, ports: str = "80") -> str:
     visible = [element.value for element in app.text if isinstance(element.value, str)]
     visible.extend(element.value for element in app.markdown if isinstance(element.value, str))
     visible.extend(element.value for element in app.error if isinstance(element.value, str))
+    visible.extend(element.value for element in app.info if isinstance(element.value, str))
+    visible.extend(element.value for element in app.success if isinstance(element.value, str))
+    visible.extend(element.value for element in app.warning if isinstance(element.value, str))
     return "\n".join(visible)
 
 
@@ -48,9 +51,9 @@ def test_ui_denies_public_and_excluded_targets_and_empty_ports(monkeypatch) -> N
     empty_ports = _submit("10.10.1.5", monkeypatch, "")
     assert "ports are required" in empty_ports
 
-    cidr_target = _submit("10.10.1.0/24", monkeypatch)
-    assert "Scope allowed: **False**" in cidr_target
-    assert "Evidence ID: `none`" in cidr_target
+    out_of_scope_cidr = _submit("8.8.8.0/30", monkeypatch)
+    assert "CIDR rejected by Scope Guard" in out_of_scope_cidr
+    assert "not inside an allowed range" in out_of_scope_cidr
 
     live_without_binary = _submit("10.10.1.5", monkeypatch, "80")
     assert "Status: `tool_not_found`" in live_without_binary
@@ -58,11 +61,17 @@ def test_ui_denies_public_and_excluded_targets_and_empty_ports(monkeypatch) -> N
     assert "Evidence ID: `none`" in live_without_binary
 
 
-def test_ui_denies_cidr_range_wildcard_and_comma_list_targets(monkeypatch) -> None:
-    for target in ("10.10.1.0/24", "10.10.1.1-20", "10.10.1.*", "10.10.1.5,10.10.1.6"):
+def test_ui_denies_range_wildcard_and_comma_list_targets(monkeypatch) -> None:
+    for target in ("10.10.1.1-20", "10.10.1.*", "10.10.1.5,10.10.1.6"):
         visible = _submit(target, monkeypatch)
         assert "Scope allowed: **False**" in visible
         assert "Evidence ID: `none`" in visible
+
+
+def test_ui_cidr_sweep_runs_per_host_pipeline(monkeypatch) -> None:
+    visible = _submit("10.10.1.0/30", monkeypatch)
+    assert "CIDR orchestration" in visible
+    assert "Per-host results" in visible
 
 
 def _import_upload(name: str, data: bytes) -> AppTest:
@@ -166,3 +175,22 @@ def test_agent_and_assistant_tabs_render(monkeypatch) -> None:
     assert any("Start Autonomous Assessment" in getattr(btn, "label", "") for btn in app.button)
     assert any("Assistant" in getattr(btn, "label", "") for btn in app.button)
 
+
+def test_webscan_sidebar_reports_failed_attempt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PROOFPATH_DATA_DIR", str(tmp_path / "data"))
+    app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=20).run()
+    app.session_state["tool_ingestion_status"] = {
+        "ProofPath Web Scan": {
+            "count": 0,
+            "evidence_id": "EV-0099",
+            "status": "error",
+        }
+    }
+    app.run()
+    sidebar = "\n".join(
+        item.value for item in app.markdown if isinstance(item.value, str)
+    )
+    assert "ERROR" in sidebar
+    assert "0 findings" in sidebar
+    assert "EV-0099" in sidebar
+    assert not app.exception

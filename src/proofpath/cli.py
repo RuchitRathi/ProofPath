@@ -27,11 +27,13 @@ from proofpath.adapters.nikto_import import import_nikto_report
 from proofpath.adapters.zap_import import import_zap_report
 from proofpath.adapters.metasploit_import import import_metasploit_report
 from proofpath.adapters.nmap import NmapAdapter, NmapExecutionConfig, RecordedNmapXMLAdapter
+from proofpath.adapters.webscan import WebScanAdapter
 from proofpath.approval import decide_approval, request_approval
 from proofpath.correlator import correlate_findings
 from proofpath.diff import compare_assessments
 from proofpath.integrations import INTEGRATIONS
 from proofpath.normalizer import normalize_nmap_observations
+from proofpath.orchestrator import sweep_cidr
 from proofpath.proposer import OllamaClient, OllamaConfig, RulePlanner, propose_and_gate
 from proofpath.report.generator import generate_pdf
 from proofpath.report.sarif import export_sarif
@@ -101,7 +103,8 @@ def _parse_ports(text: str) -> list[int]:
 
 def handle_scan(args: argparse.Namespace) -> int:
     """Run a scoped live Nmap reconnaissance scan or import XML."""
-    _print_header("ProofPath Reconnaissance & Service Discovery", f"Target: {args.target} | Ports: {args.ports}")
+    title = "ProofPath Live Web/TLS Security Scan" if getattr(args, "web", False) else "ProofPath Reconnaissance & Service Discovery"
+    _print_header(title, f"Target: {args.target} | Ports: {args.ports}")
     scope_path = Path(args.scope)
     guard = ScopeGuard.from_yaml(scope_path)
     if getattr(args, "open_scope", False):
@@ -118,32 +121,44 @@ def handle_scan(args: argparse.Namespace) -> int:
         _print(f"[red]Error:[/red] {e}")
         return 1
 
-    action = Action(
-        id=uuid.uuid4().hex,
-        name=ActionName.NMAP_SCAN,
-        target=args.target,
-        ports=ports,
-        arguments={
-            "service_detection": True,
-            "skip_host_discovery": args.skip_ping,
-            "timing": 2,
-            "host_timeout_seconds": 60,
-        },
-        engagement_id=guard.policy.engagement,
-        requested_by=args.requester,
-    )
-
-    if args.import_xml:
-        xml_path = Path(args.import_xml)
-        if not xml_path.is_file():
-            _print(f"[red]Error:[/red] Nmap XML file not found: {xml_path}")
-            return 1
-        raw_xml = xml_path.read_bytes()
-        action.name = ActionName.IMPORT_NMAP_XML
-        adapters = {ActionName.IMPORT_NMAP_XML: RecordedNmapXMLAdapter(raw_xml)}
+    if getattr(args, "web", False):
+        action = Action(
+            id=uuid.uuid4().hex,
+            name=ActionName.WEB_SCAN,
+            target=args.target,
+            ports=ports,
+            arguments={},
+            engagement_id=guard.policy.engagement,
+            requested_by=args.requester,
+        )
+        adapters = {ActionName.WEB_SCAN: WebScanAdapter()}
     else:
-        nmap_config = NmapExecutionConfig.from_yaml(Path("nmap.yaml") if Path("nmap.yaml").is_file() else None)
-        adapters = {ActionName.NMAP_SCAN: NmapAdapter(wsl_distribution=nmap_config.distribution if nmap_config.runtime == "wsl" else None)}
+        action = Action(
+            id=uuid.uuid4().hex,
+            name=ActionName.NMAP_SCAN,
+            target=args.target,
+            ports=ports,
+            arguments={
+                "service_detection": True,
+                "skip_host_discovery": args.skip_ping,
+                "timing": 2,
+                "host_timeout_seconds": 60,
+            },
+            engagement_id=guard.policy.engagement,
+            requested_by=args.requester,
+        )
+
+        if args.import_xml:
+            xml_path = Path(args.import_xml)
+            if not xml_path.is_file():
+                _print(f"[red]Error:[/red] Nmap XML file not found: {xml_path}")
+                return 1
+            raw_xml = xml_path.read_bytes()
+            action.name = ActionName.IMPORT_NMAP_XML
+            adapters = {ActionName.IMPORT_NMAP_XML: RecordedNmapXMLAdapter(raw_xml)}
+        else:
+            nmap_config = NmapExecutionConfig.from_yaml(Path("nmap.yaml") if Path("nmap.yaml").is_file() else None)
+            adapters = {ActionName.NMAP_SCAN: NmapAdapter(wsl_distribution=nmap_config.distribution if nmap_config.runtime == "wsl" else None)}
 
     audit.append("analyst_request", args.requester, {"request": "CLI Reconnaissance scan", "target": args.target, "ports": args.ports})
     res = execute_action(action, guard, audit, ledger, adapters)
@@ -155,6 +170,21 @@ def handle_scan(args: argparse.Namespace) -> int:
     _print(f"[green]Scope Status:[/green] Authorized · Tool Status: {res.status}")
     if res.evidence_id:
         _print(f"[cyan]Evidence ID:[/cyan] {res.evidence_id}")
+
+    if res.findings:
+        _print(f"\n[bold]Web Security Findings ({len(res.findings)}):[/bold]")
+        if console:
+            tbl = Table(show_header=True, header_style="bold magenta")
+            tbl.add_column("ID")
+            tbl.add_column("Severity")
+            tbl.add_column("Title")
+            tbl.add_column("Observed")
+            for fnd in res.findings:
+                tbl.add_row(fnd.id, fnd.severity, fnd.title, fnd.observed[:60])
+            console.print(tbl)
+        else:
+            for fnd in res.findings:
+                print(f"  [{fnd.severity}] {fnd.id} - {fnd.title} :: {fnd.observed[:80]}")
 
     if res.services:
         _print(f"\n[bold]Discovered Services ({len(res.services)}):[/bold]")
@@ -172,7 +202,7 @@ def handle_scan(args: argparse.Namespace) -> int:
         else:
             for svc in res.services:
                 print(f"  {svc.ip}:{svc.port}/{svc.protocol} - {svc.service} ({svc.state}) {svc.product or ''} {svc.version or ''}".strip())
-    else:
+    elif not res.findings:
         _print("[yellow]No active services discovered for the given target and ports.[/yellow]")
 
     return 0
@@ -374,6 +404,19 @@ def handle_report(args: argparse.Namespace) -> int:
     raw = json.loads(findings_file.read_text(encoding="utf-8"))
     findings = correlate_findings([Finding.model_validate(item) for item in raw], [])
 
+    baseline_findings = None
+    if getattr(args, "baseline", None):
+        baseline_path = Path(args.baseline)
+        if not baseline_path.is_file():
+            _print(f"[red]Error:[/red] Baseline findings file not found: {baseline_path}")
+            return 1
+        baseline_findings = [Finding.model_validate(item) for item in json.loads(baseline_path.read_text(encoding="utf-8"))]
+        delta = compare_assessments(baseline_findings, findings)
+        _print(
+            f"  Retest vs baseline: [green]{delta.total_remediated} remediated[/green] · "
+            f"{delta.total_persisting} persisting · {delta.total_new} new"
+        )
+
     out_path = Path(args.output) if args.output else data_dir / "reports" / "assessment.pdf"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -386,16 +429,13 @@ def handle_report(args: argparse.Namespace) -> int:
             out_path,
             engagement=guard.policy.engagement,
             scope_cidrs=guard.policy.allowed_cidrs,
+            baseline_findings=baseline_findings,
         )
         _print(f"[bold green]Report Generated:[/bold green] {report_res['path']}")
         _print(f"  Cryptographic SHA-256 Digest: [cyan]{report_res['sha256']}[/cyan]")
         _print(f"  Grounded findings: {report_res['grounded_findings']}/{report_res['total_findings']}")
-
-        if args.sarif:
-            sarif_path = out_path.with_suffix(".sarif")
-            sarif_data = export_sarif(findings, guard.policy.engagement)
-            sarif_path.write_text(json.dumps(sarif_data, indent=2), encoding="utf-8")
-            _print(f"  [bold green]SARIF Export:[/bold green] {sarif_path}")
+        _print(f"  [bold green]OASIS SARIF Export:[/bold green] {report_res['sarif_path']}")
+        _print(f"  [bold green]SIEM CEF Export:[/bold green] {report_res['cef_path']}")
 
         return 0
     except Exception as exc:
@@ -436,70 +476,100 @@ def handle_assess_all(args: argparse.Namespace) -> int:
     # Phase 1: Reconnaissance
     _print("\n[bold cyan][Phase 1/8] Service Reconnaissance & Port Enumeration[/bold cyan]")
     ports = _parse_ports(args.ports)
-    action = Action(
-        id=uuid.uuid4().hex,
-        name=ActionName.NMAP_SCAN,
-        target=args.target,
-        ports=ports,
-        arguments={"service_detection": True, "skip_host_discovery": True, "timing": 2, "host_timeout_seconds": 60},
-        engagement_id=guard.policy.engagement,
-        requested_by="autonomous-assessor",
-    )
-
     fixture = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "demo"
-    if args.demo or not (fixture / "nmap.xml").is_file():
-        action.name = ActionName.IMPORT_NMAP_XML
-        adapters = {ActionName.IMPORT_NMAP_XML: RecordedNmapXMLAdapter((fixture / "nmap.xml").read_bytes())}
-        _print("  Using recorded Nmap XML evidence for demo target.")
+
+    nmap_config = NmapExecutionConfig.from_yaml(Path("nmap.yaml") if Path("nmap.yaml").is_file() else None)
+    live_adapters = {ActionName.NMAP_SCAN: NmapAdapter(wsl_distribution=nmap_config.distribution if nmap_config.runtime == "wsl" else None)}
+    nmap_arguments = {"service_detection": True, "skip_host_discovery": True, "timing": 2, "host_timeout_seconds": 60}
+
+    services: list[ServiceObservation] = []
+
+    if "/" in args.target:
+        # CIDR orchestration: the judge hands us a range, we enumerate only the
+        # in-scope hosts and run the same per-host pipeline over each one.
+        sweep_hosts, sweep_error = guard.enumerate_hosts(args.target, max_hosts=args.max_hosts)
+        if sweep_error:
+            _print(f"[bold red]CIDR REJECTED:[/bold red] {sweep_error}")
+            return 1
+        if not sweep_hosts:
+            _print("[yellow]No in-scope hosts remain inside that CIDR after exclusions. Nothing to sweep.[/yellow]")
+            return 1
+        _print(f"  CIDR orchestration: {len(sweep_hosts)} in-scope host(s) enumerated from {args.target}.")
+        sweep_report = sweep_cidr(
+            guard, audit, ledger, live_adapters, args.target, ports, sweep_hosts,
+            delay_seconds=args.delay, requester="cidr-orchestrator",
+        )
+        for row in sweep_report.results:
+            colour = "green" if row.allowed else "red"
+            _print(f"    [{colour}]{row.host}[/{colour}]: {row.reason} · services={row.service_count} · evidence={row.evidence_id or 'none'}")
+        services = list(sweep_report.services)
+        _print(f"  [green]Sweep complete:[/green] {len(services)} service(s) across {len(sweep_report.results)} host(s).")
     else:
-        nmap_config = NmapExecutionConfig.from_yaml(Path("nmap.yaml") if Path("nmap.yaml").is_file() else None)
-        adapters = {ActionName.NMAP_SCAN: NmapAdapter(wsl_distribution=nmap_config.distribution if nmap_config.runtime == "wsl" else None)}
-        _print(f"  Executing live Nmap scan via WSL on {args.target}...")
+        action = Action(
+            id=uuid.uuid4().hex,
+            name=ActionName.NMAP_SCAN,
+            target=args.target,
+            ports=ports,
+            arguments=nmap_arguments,
+            engagement_id=guard.policy.engagement,
+            requested_by="autonomous-assessor",
+        )
+        if args.demo or not (fixture / "nmap.xml").is_file():
+            action.name = ActionName.IMPORT_NMAP_XML
+            adapters = {ActionName.IMPORT_NMAP_XML: RecordedNmapXMLAdapter((fixture / "nmap.xml").read_bytes())}
+            _print("  Using recorded Nmap XML evidence for demo target.")
+        else:
+            adapters = live_adapters
+            _print(f"  Executing live Nmap scan via WSL on {args.target}...")
 
-    recon_res = execute_action(action, guard, audit, ledger, adapters)
-    if not recon_res.decision.allowed:
-        _print(f"[bold red]SCOPE DENIED:[/bold red] {recon_res.decision.reason}")
-        return 1
-
-    services = list(recon_res.services)
-    _print(f"  [green]Recon complete:[/green] {len(services)} services identified. Evidence: {recon_res.evidence_id}")
+        recon_res = execute_action(action, guard, audit, ledger, adapters)
+        if not recon_res.decision.allowed:
+            _print(f"[bold red]SCOPE DENIED:[/bold red] {recon_res.decision.reason}")
+            return 1
+        services = list(recon_res.services)
+        _print(f"  [green]Recon complete:[/green] {len(services)} services identified. Evidence: {recon_res.evidence_id}")
 
     # Phase 2: Ingest Multi-Tool Scanner Findings
     _print("\n[bold cyan][Phase 2/8] Multi-Tool Vulnerability Ingestion (All 7 Adapters)[/bold cyan]")
     all_raw_findings: list[Finding] = []
     tool_counts: dict[str, int] = {}
 
-    if (fixture / "nessus.nessus").is_file():
-        nessus = import_nessus_xml((fixture / "nessus.nessus").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
-        all_raw_findings.extend(nessus.findings)
-        tool_counts["Nessus"] = len(nessus.findings)
+    if args.demo:
+        if (fixture / "nessus.nessus").is_file():
+            nessus = import_nessus_xml((fixture / "nessus.nessus").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
+            all_raw_findings.extend(nessus.findings)
+            tool_counts["Nessus"] = len(nessus.findings)
 
-    if (fixture / "burp.xml").is_file():
-        burp = import_burp_xml((fixture / "burp.xml").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
-        all_raw_findings.extend(burp.findings)
-        tool_counts["Burp Suite"] = len(burp.findings)
+        if (fixture / "burp.xml").is_file():
+            burp = import_burp_xml((fixture / "burp.xml").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
+            all_raw_findings.extend(burp.findings)
+            tool_counts["Burp Suite"] = len(burp.findings)
 
-    if (fixture / "openvas.xml").is_file():
-        ov = import_openvas_xml((fixture / "openvas.xml").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
-        all_raw_findings.extend(ov.findings)
-        tool_counts["OpenVAS"] = len(ov.findings)
+        if (fixture / "openvas.xml").is_file():
+            ov = import_openvas_xml((fixture / "openvas.xml").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
+            all_raw_findings.extend(ov.findings)
+            tool_counts["OpenVAS"] = len(ov.findings)
 
-    if (fixture / "nikto.json").is_file():
-        nk = import_nikto_report((fixture / "nikto.json").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
-        all_raw_findings.extend(nk.findings)
-        tool_counts["Nikto"] = len(nk.findings)
+        if (fixture / "nikto.json").is_file():
+            nk = import_nikto_report((fixture / "nikto.json").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
+            all_raw_findings.extend(nk.findings)
+            tool_counts["Nikto"] = len(nk.findings)
 
-    if (fixture / "zap.xml").is_file():
-        zp = import_zap_report((fixture / "zap.xml").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
-        all_raw_findings.extend(zp.findings)
-        tool_counts["OWASP ZAP"] = len(zp.findings)
+        if (fixture / "zap.xml").is_file():
+            zp = import_zap_report((fixture / "zap.xml").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
+            all_raw_findings.extend(zp.findings)
+            tool_counts["OWASP ZAP"] = len(zp.findings)
 
-    if (fixture / "metasploit.xml").is_file():
-        ms = import_metasploit_report((fixture / "metasploit.xml").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
-        all_raw_findings.extend(ms.findings)
-        tool_counts["Metasploit"] = len(ms.findings)
+        if (fixture / "metasploit.xml").is_file():
+            ms = import_metasploit_report((fixture / "metasploit.xml").read_bytes(), guard, audit, ledger, actor="autonomous-assessor")
+            all_raw_findings.extend(ms.findings)
+            tool_counts["Metasploit"] = len(ms.findings)
 
-    _print("  Ingested tool findings: " + ", ".join(f"{k}: {v}" for k, v in tool_counts.items()))
+        _print("  Ingested tool findings: " + ", ".join(f"{k}: {v}" for k, v in tool_counts.items()))
+    else:
+        _print("  [yellow]Live mode:[/yellow] synthetic vendor fixtures skipped to avoid fabricated findings. "
+                "Only live Nmap reconnaissance is used; Nessus/Burp/OpenVAS/Nikto/ZAP/Metasploit are import-only "
+                "(use 'proofpath import').")
 
     # Phase 3: Deterministic Correlation
     _print("\n[bold cyan][Phase 3/8] Cross-Tool Correlation & Conflict Analysis[/bold cyan]")
@@ -569,11 +639,11 @@ def handle_assess_all(args: argparse.Namespace) -> int:
         public_intel=public_intel,
     )
     sarif_out = pdf_out.with_suffix(".sarif")
-    sarif_data = export_sarif(findings, guard.policy.engagement)
-    sarif_out.write_text(json.dumps(sarif_data, indent=2), encoding="utf-8")
+    export_sarif(findings, sarif_out)
 
     _print(f"  [bold green]Formal PDF Report:[/bold green] {pdf_res['path']}")
     _print(f"  [bold green]OASIS SARIF Export:[/bold green] {sarif_out}")
+    _print(f"  [bold green]SIEM CEF Export:[/bold green] {pdf_res.get('cef_path', '')}")
     _print(f"  Report SHA-256 Digest: [cyan]{pdf_res['sha256']}[/cyan]")
 
     # Phase 8: Cryptographic Audit Verification
@@ -618,14 +688,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # 0. assess (single all-in-one command)
     assess_cmd = sub.add_parser("assess", help="execute full end-to-end VAPT pipeline with Qwen AI agent in one command")
-    assess_cmd.add_argument("--target", default="10.20.0.10", help="target host or IP address")
+    assess_cmd.add_argument("--target", default="10.20.0.10", help="target host, IP address, or CIDR range (e.g. 10.20.0.0/24)")
     assess_cmd.add_argument("--ports", default="80,443,8080,8443", help="comma-separated ports to assess")
     assess_cmd.add_argument("--scope", default="scope.yaml", help="path to scope.yaml")
     assess_cmd.add_argument("--data", default="data/run", help="data output directory")
     assess_cmd.add_argument("--output", help="custom output PDF path")
     assess_cmd.add_argument("--open-scope", action="store_true", help="enable universal IP scope mode")
     assess_cmd.add_argument("--max-steps", type=int, default=10, help="max autonomous ReAct agent steps")
-    assess_cmd.add_argument("--demo", action="store_true", default=True, help="use recorded demo reconnaissance if live host unreachable")
+    assess_cmd.add_argument("--max-hosts", type=int, default=256, help="cap on hosts enumerated from a --target CIDR")
+    assess_cmd.add_argument("--delay", type=float, default=0.0, help="seconds to wait between hosts during a CIDR sweep")
+    assess_cmd.add_argument("--demo", action=argparse.BooleanOptionalAction, default=True, help="use recorded demo reconnaissance fixtures (default). Pass --no-demo to run a live Nmap scan against --target")
 
     # 1. verify
     verify = sub.add_parser("verify", help="recompute and cryptographically verify the hash-chained audit log")
@@ -651,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
     scan_cmd.add_argument("--requester", default="cli-analyst", help="analyst identity for audit log")
     scan_cmd.add_argument("--skip-ping", action="store_true", default=True, help="disable ICMP ping (-Pn)")
     scan_cmd.add_argument("--import-xml", help="import recorded Nmap XML instead of running live")
+    scan_cmd.add_argument("--web", action="store_true", help="run the live web/TLS security scan instead of Nmap")
     scan_cmd.add_argument("--open-scope", action="store_true", help="enable universal IP scope mode")
 
     # 5. import (ingest tool report)
@@ -677,11 +750,11 @@ def main(argv: list[str] | None = None) -> int:
     plan_cmd.add_argument("--ai", action="store_true", help="consult local Qwen model for next step")
 
     # 9. report
-    report_cmd = sub.add_parser("report", help="generate formal ReportLab PDF and OASIS SARIF v2.1.0 exports")
+    report_cmd = sub.add_parser("report", help="generate formal ReportLab PDF with OASIS SARIF v2.1.0 and SIEM CEF exports")
     report_cmd.add_argument("--data", default="data")
     report_cmd.add_argument("--scope", default="scope.yaml")
     report_cmd.add_argument("--output", help="custom output PDF path")
-    report_cmd.add_argument("--sarif", action="store_true", default=True, help="also generate SARIF v2.1.0 export")
+    report_cmd.add_argument("--baseline", help="path to a previous current-findings.json to add a retest/remediation-status section")
 
     # 10. tools
     tools_cmd = sub.add_parser("tools", help="display security tool integrations and capabilities")

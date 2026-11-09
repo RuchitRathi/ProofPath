@@ -13,6 +13,11 @@ INTEGRATIONS: list[dict[str, str]] = [
         "limitation": "Live-capable; this workstation's WSL Ubuntu 7.98 run was verified only against 127.0.0.1 inside WSL and returned a closed port. The Windows in-process server was not reachable from WSL loopback. Recorded XML import remains labeled imported. Guarded skip_host_discovery maps to -Pn and defaults off.",
     },
     {
+        "tool": "ProofPath Web Scan",
+        "mode": "Live",
+        "limitation": "Native read-only GET probe. Connects only to the scope guard's resolved IPs and reads response headers, cookie flags, and TLS negotiation into evidence-backed findings. No body, caller headers, or redirects.",
+    },
+    {
         "tool": "Nikto",
         "mode": "Import-only",
         "limitation": "Imports bounded Nikto JSON or XML reports. Web configuration issues, sensitive paths, and headers are normalized with source evidence references.",

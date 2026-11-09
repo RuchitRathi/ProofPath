@@ -18,6 +18,7 @@ def _sample_finding(
     cves: list[str] | None = None,
     cwes: list[str] | None = None,
     status: str = "suspected",
+    mapped_to: list[str] | None = None,
 ) -> Finding:
     now = datetime.now(timezone.utc)
     return Finding(
@@ -37,7 +38,7 @@ def _sample_finding(
         status=status,
         cves=cves or [],
         cwes=cwes or [],
-        mapped_to=["mapped to NIST SP 800-115", "mapped to OWASP Top 10:2021-A03"],
+        mapped_to=mapped_to if mapped_to is not None else ["mapped to NIST SP 800-115", "mapped to OWASP Top 10:2021-A03"],
         first_seen=now,
         last_seen=now,
     )
@@ -83,4 +84,83 @@ def test_retesting_diff_engine() -> None:
     assert diff.total_remediated == 1
     assert diff.remediated_findings[0].id == "F-002"
     assert diff.summary() == {"new": 1, "persisting": 1, "remediated": 1}
+
+
+def test_report_includes_retest_section_only_with_baseline(tmp_path: Path) -> None:
+    from pypdf import PdfReader
+
+    from proofpath.audit import AuditLog
+    from proofpath.ledger import Ledger
+    from proofpath.report.generator import generate_pdf
+
+    ledger = Ledger(tmp_path / "evidence")
+    ledger.store(content=b"sample", tool="nessus", command=["import"], status="ok", summary="synthetic fixture", source_mode="imported")
+
+    baseline = [
+        _sample_finding("F-001", "XSS Vulnerability", cwes=["CWE-79"]),
+        _sample_finding("F-002", "Path Traversal", cves=["CVE-2021-41773"]),
+    ]
+    current = [
+        _sample_finding("F-001", "XSS Vulnerability", cwes=["CWE-79"]),
+        _sample_finding("F-003", "SQL Injection", cwes=["CWE-89"]),
+    ]
+
+    with_baseline = tmp_path / "with-baseline.pdf"
+    generate_pdf(
+        current, [], ledger, AuditLog(tmp_path / "a.jsonl"), with_baseline,
+        engagement="test", scope_cidrs=["10.10.1.0/24"], baseline_findings=baseline,
+    )
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(str(with_baseline)).pages)
+    assert "Remediation Status (Retest vs Baseline)" in text
+    assert text.index("7.7") < text.index("7.8") < text.index("Appendix A: Evidence Index")
+    assert "Remediated" in text and "F-002" in text
+    assert "Persisting" in text and "New" in text
+
+    without = tmp_path / "without-baseline.pdf"
+    generate_pdf(
+        current, [], ledger, AuditLog(tmp_path / "b.jsonl"), without,
+        engagement="test", scope_cidrs=["10.10.1.0/24"],
+    )
+    plain = "\n".join(page.extract_text() or "" for page in PdfReader(str(without)).pages)
+    assert "Remediation Status" not in plain
+
+
+def test_report_quality_upgrade_sections(tmp_path: Path) -> None:
+    from pypdf import PdfReader
+
+    from proofpath.audit import AuditLog
+    from proofpath.ledger import Ledger
+    from proofpath.report.generator import generate_pdf
+
+    ledger = Ledger(tmp_path / "evidence")
+    ledger.store(content=b"sample", tool="nessus", command=["import"], status="ok", summary="synthetic fixture", source_mode="imported")
+
+    findings = [
+        _sample_finding("F-001", "XSS Vulnerability", cwes=["CWE-79"], severity="critical"),
+        _sample_finding(
+            "F-002", "Path Traversal", cves=["CVE-2021-41773"], cwes=["CWE-22"], severity="high",
+            mapped_to=["mapped to OWASP Top 10:2021-A01 (Broken Access Control)", "mapped to MITRE ATT&CK:T1083 (File and Directory Discovery)"],
+        ),
+    ]
+
+    out = tmp_path / "quality.pdf"
+    generate_pdf(
+        findings, [], ledger, AuditLog(tmp_path / "a.jsonl"), out,
+        engagement="test", scope_cidrs=["10.10.1.0/24"],
+    )
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(str(out)).pages)
+
+    # Executive-summary key themes with remediation horizon guidance
+    assert "Key themes" in text
+    assert "immediate (24 hours)" in text
+    # Prioritised remediation roadmap inside section 7.5
+    assert "Prioritised remediation roadmap" in text
+    # ATT&CK / OWASP / NIST coverage mapped from observed CWEs
+    assert "Observed coverage" in text
+    assert "mapped to OWASP Top 10:2021-A03" in text
+    assert "mapped to MITRE ATT&CK" in text
+    # Evidence appendix index cross-reference
+    assert "Finding" in text and "evidence cross-reference" in text
+    assert text.index("Appendix A: Evidence Index") < text.index("Appendix B: Integration Status Matrix")
+
 

@@ -34,11 +34,14 @@ from proofpath.assistant import SecurityAssistant
 from proofpath.report.sarif import export_sarif
 from proofpath.diff import compare_assessments
 from proofpath.adapters.nmap import NmapAdapter, NmapExecutionConfig, RecordedNmapXMLAdapter
+from proofpath.adapters.webscan import WebScanAdapter
 from proofpath.audit import AuditLog
 from proofpath.approval import decide_approval, request_approval
 from proofpath.correlator import correlate_findings
 from proofpath.integrations import INTEGRATIONS
 from proofpath.grounding import verify_finding, verify_text
+from proofpath.qa import answer_report_question
+from proofpath.viz import attack_bars_html, attack_coverage, heatmap_html, remediation_trend_html
 from proofpath.ledger import Ledger
 from proofpath.proposer import (
     OllamaClient,
@@ -57,6 +60,10 @@ from proofpath.threat_intel import load_public_threat_intel
 from proofpath.xml_evidence import MAX_IMPORT_BYTES
 from proofpath.schemas import Action, ActionName, Finding, ServiceObservation
 from proofpath.scope_guard import ScopeGuard
+from proofpath.orchestrator import sweep_cidr
+
+# Upper bound on hosts enumerated from a single CIDR sweep in the UI.
+MAX_SWEEP_HOSTS = 256
 
 # ---------------------------------------------------------------------------
 # Page config & CSS
@@ -205,6 +212,7 @@ NMAP_ADAPTERS = {
         wsl_distribution=NMAP_CONFIG.distribution if NMAP_CONFIG.runtime == "wsl" else None
     )
 }
+WEB_ADAPTERS = {ActionName.WEB_SCAN: WebScanAdapter()}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -333,11 +341,17 @@ _DEFAULTS = {
     "criticality_by_asset": {},
     "approval_records": {},
     "report_path": "",
+    "cef_path": "",
+    "sarif_path": "",
+    "_demo_loaded": False,
     "agent_result": None,
     "agent_running": False,
     "tool_ingestion_status": {},   # tool_name -> {"count": int, "evidence_id": str}
     "ollama_warmup_status": "",
     "grounding_rejections": set(),
+    "retest_baseline": None,
+    "retest_label": "",
+    "retest_diff": None,
 }
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
@@ -378,6 +392,7 @@ def _load_demo_assessment() -> None:
     )
     st.session_state.observations = list(_res.services)
     _raw_f: list[Finding] = []
+    st.session_state.tool_ingestion_status = {}
     _demo_tool_map = [
         ("nessus.nessus", import_nessus_xml, "Nessus"),
         ("burp.xml", import_burp_xml, "Burp Suite"),
@@ -397,6 +412,54 @@ def _load_demo_assessment() -> None:
             }
     st.session_state.raw_findings = _raw_f
     st.session_state["_recon_submitted"] = False
+    st.session_state["_demo_loaded"] = True
+
+
+def _render_tool_coverage(slot) -> None:
+    """Refresh the sidebar status cards from the latest session state."""
+    with slot.container():
+        st.markdown("#### Tool Coverage")
+        _ingested = st.session_state.tool_ingestion_status
+        _nmap_loaded = bool(st.session_state.observations)
+        _sidebar_tools = [
+            ("Nmap", "Live", _nmap_loaded, f"{len(st.session_state.observations)} services"),
+            ("ProofPath Web Scan", "Live", "ProofPath Web Scan" in _ingested, ""),
+            ("Nessus", "Import-only", "Nessus" in _ingested, f"{_ingested.get('Nessus', {}).get('count', 0)} findings"),
+            ("Burp Suite", "Import-only", "Burp Suite" in _ingested, f"{_ingested.get('Burp Suite', {}).get('count', 0)} findings"),
+            ("OpenVAS", "Import-only", "OpenVAS" in _ingested, f"{_ingested.get('OpenVAS', {}).get('count', 0)} findings"),
+            ("Nikto", "Import-only", "Nikto" in _ingested, f"{_ingested.get('Nikto', {}).get('count', 0)} findings"),
+            ("OWASP ZAP", "Import-only", "OWASP ZAP" in _ingested, f"{_ingested.get('OWASP ZAP', {}).get('count', 0)} findings"),
+            ("Metasploit", "Import-only", "Metasploit" in _ingested, f"{_ingested.get('Metasploit', {}).get('count', 0)} findings"),
+        ]
+        for tool_name, mode, loaded, detail in _sidebar_tools:
+            mode_cls = "tool-mode-live" if mode == "Live" else "tool-mode-import"
+            if tool_name == "ProofPath Web Scan":
+                scan = _ingested.get(tool_name)
+                if scan:
+                    status = scan.get("status", "unknown").upper()
+                    evidence_id = scan.get("evidence_id") or "no evidence"
+                    detail = f"{status} · {scan.get('count', 0)} findings · {evidence_id}"
+                    status_cls = "tool-loaded" if scan.get("status") == "ok" else "tool-empty"
+                    status_line = f'<span class="{status_cls}">{detail}</span>'
+                else:
+                    status_line = '<span class="tool-empty">Not run · explicit live scan</span>'
+            else:
+                status_line = (
+                    f'<span class="tool-loaded">✔ {detail}</span>'
+                    if loaded
+                    else '<span class="tool-empty">Not loaded</span>'
+                )
+            st.markdown(
+                f'<div class="tool-card">'
+                f'  <div class="tool-card-header">'
+                f'    <span class="tool-card-name">{tool_name}</span>'
+                f'    <span class="{mode_cls}">{mode}</span>'
+                f'  </div>'
+                f'  {status_line}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
 
 # Determine model config
 model_configured = False
@@ -461,41 +524,17 @@ with st.sidebar:
         except Exception as exc:
             st.session_state["_demo_error"] = str(exc)
         st.rerun()
+    st.caption(
+        "Loads the labelled **SYNTHETIC** 7-tool dataset (host 10.20.0.10) from bundled "
+        "fixtures. No network activity — safe to run during a live demo. Web Scan is a "
+        "separate live operation under Scan & Recon and is not run by this button."
+    )
     if st.session_state.get("_demo_error"):
         st.error(f"Error loading demo: {st.session_state.pop('_demo_error')}")
 
     # ── Tool status panel ─────────────────────────────────────────────────
-    st.markdown("#### Tool Coverage")
-    _TOOL_MODES = {row["tool"]: row["mode"] for row in INTEGRATIONS}
-    _INGESTED = st.session_state.tool_ingestion_status  # {tool: {count, evidence_id}}
-    _NMAP_LOADED = bool(st.session_state.observations)
-
-    _SIDEBAR_TOOLS = [
-        ("Nmap", "Live", _NMAP_LOADED, f"{len(st.session_state.observations)} services"),
-        ("Nessus", "Import-only", "Nessus" in _INGESTED, f"{_INGESTED.get('Nessus', {}).get('count', 0)} findings"),
-        ("Burp Suite", "Import-only", "Burp Suite" in _INGESTED, f"{_INGESTED.get('Burp Suite', {}).get('count', 0)} findings"),
-        ("OpenVAS", "Import-only", "OpenVAS" in _INGESTED, f"{_INGESTED.get('OpenVAS', {}).get('count', 0)} findings"),
-        ("Nikto", "Import-only", "Nikto" in _INGESTED, f"{_INGESTED.get('Nikto', {}).get('count', 0)} findings"),
-        ("OWASP ZAP", "Import-only", "OWASP ZAP" in _INGESTED, f"{_INGESTED.get('OWASP ZAP', {}).get('count', 0)} findings"),
-        ("Metasploit", "Import-only", "Metasploit" in _INGESTED, f"{_INGESTED.get('Metasploit', {}).get('count', 0)} findings"),
-    ]
-    for tool_name, mode, loaded, detail in _SIDEBAR_TOOLS:
-        mode_cls = "tool-mode-live" if mode == "Live" else "tool-mode-import"
-        status_line = (
-            f'<span class="tool-loaded">✔ {detail}</span>'
-            if loaded
-            else '<span class="tool-empty">Not loaded</span>'
-        )
-        st.markdown(
-            f'<div class="tool-card">'
-            f'  <div class="tool-card-header">'
-            f'    <span class="tool-card-name">{tool_name}</span>'
-            f'    <span class="{mode_cls}">{mode}</span>'
-            f'  </div>'
-            f'  {status_line}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+    _tool_coverage_slot = st.empty()
+    _render_tool_coverage(_tool_coverage_slot)
 
     st.divider()
 
@@ -533,8 +572,14 @@ with st.sidebar:
         st.session_state.plan_status = ""
         st.session_state.approval_records = {}
         st.session_state.report_path = ""
+        st.session_state.cef_path = ""
+        st.session_state.sarif_path = ""
+        st.session_state["_demo_loaded"] = False
         st.session_state.transcript = []
         st.session_state.agent_result = None
+        st.session_state.retest_baseline = None
+        st.session_state.retest_label = ""
+        st.session_state.retest_diff = None
         st.session_state["_open_scope_override"] = False
         st.session_state["_recon_submitted"] = False
         st.session_state["_auto_loaded"] = False  # allow re-auto-load on next render
@@ -580,6 +625,16 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+if st.session_state.get("_demo_loaded"):
+    st.markdown(
+        '<div style="border:1px solid rgba(245,158,11,0.45);background:rgba(245,158,11,0.10);'
+        'border-radius:8px;padding:0.6rem 1rem;margin:0.4rem 0 0.8rem 0;color:#fcd34d;font-size:0.85rem;">'
+        '⚠ <b>SYNTHETIC DEMO DATA</b> — findings below come from bundled fixture files '
+        '(host 10.20.0.10), not a live engagement. Use <b>Reset Assessment</b> to clear them.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 # Stage stepper
 _STAGES = [
@@ -687,6 +742,7 @@ if merged_findings:
     tab_findings,
     tab_planner,
     tab_risk,
+    tab_retest,
     tab_approvals,
     tab_report,
     tab_agent,
@@ -697,6 +753,7 @@ if merged_findings:
     "Findings",
     "AI Planner",
     "Risk Rank",
+    "Retest",
     "Approvals",
     "Report",
     "Auto Agent",
@@ -709,8 +766,9 @@ with tab_scan:
     st.subheader("Reconnaissance — Nmap Service Discovery")
     st.caption(
         "Run a live TCP connect scan through the WSL Ubuntu Nmap adapter, "
-        "or import a previously recorded Nmap XML. Every result is stored as a "
-        "ledger artifact with a SHA-256 hash."
+        "or import a previously recorded Nmap XML. Enter a CIDR (e.g. 10.20.0.0/24) "
+        "to sweep every in-scope host in the range — each host is still authorized "
+        "individually. Every result is stored as a ledger artifact with a SHA-256 hash."
     )
 
     with st.form("assess"):
@@ -724,12 +782,12 @@ with tab_scan:
             target = st.text_input(
                 "Target IP / Hostname",
                 value="",
-                placeholder="e.g. 10.10.1.5 or 10.20.0.10",
+                placeholder="e.g. 10.10.1.5, 10.20.0.10 or a CIDR like 10.20.0.0/24",
             )
         with c2:
             ports_text = st.text_input("Ports (comma-separated)", value="80,443,8080,8443")
             skip_host_discovery = st.checkbox("Disable ping (-Pn)", value=True)
-            source_mode = st.radio("Execution mode", ["Live scan", "Import XML"], horizontal=True)
+            source_mode = st.radio("Execution mode", ["Live scan", "Web security scan", "Import XML"], horizontal=True)
             # Auto-detect if user is scanning a different target than what's loaded
             existing_ips = {s.ip for s in st.session_state.observations}
             replace_existing = st.checkbox(
@@ -773,6 +831,7 @@ with tab_scan:
             st.session_state.plan_proposal = None
             st.session_state.plan_status = ""
             st.session_state["_auto_loaded"] = True  # prevent demo re-load after clear
+            st.session_state["_demo_loaded"] = False
             st.info(f"Previous assessment cleared — scanning {_target} fresh.")
         if not _request or not _target:
             st.error("Objective and target are both required.")
@@ -784,50 +843,112 @@ with tab_scan:
                     raise ValueError("Select a recorded Nmap XML file.")
                 if _source_mode == "Import XML" and len(_xml.getvalue()) > MAX_IMPORT_BYTES:
                     raise ValueError(f"Upload exceeds the {MAX_IMPORT_BYTES}-byte limit.")
-                action = Action(
-                    id=uuid.uuid4().hex,
-                    name=ActionName.NMAP_SCAN,
-                    target=_target,
-                    ports=ports,
-                    arguments={
-                        "service_detection": True,
-                        "skip_host_discovery": _skip_ping,
-                        "timing": 2,
-                        "host_timeout_seconds": 60,
-                    },
-                    engagement_id=GUARD.policy.engagement,
-                    requested_by="analyst",
-                )
-                if _source_mode == "Import XML":
-                    action.name = ActionName.IMPORT_NMAP_XML
-                    adapters = {ActionName.IMPORT_NMAP_XML: RecordedNmapXMLAdapter(_xml.getvalue())}
+                if "/" in _target:
+                    if _source_mode == "Import XML":
+                        raise ValueError("CIDR sweeps require Live scan mode.")
+                    if _source_mode == "Web security scan":
+                        raise ValueError("Web security scan probes a single host. Choose Live scan for a CIDR sweep.")
+                    sweep_hosts, sweep_error = GUARD.enumerate_hosts(_target, max_hosts=MAX_SWEEP_HOSTS)
+                    if sweep_error:
+                        st.error("CIDR rejected by Scope Guard: " + sweep_error)
+                    elif not sweep_hosts:
+                        st.warning("No in-scope hosts remain inside that CIDR after exclusions.")
+                    else:
+                        st.info(f"CIDR orchestration — sweeping {len(sweep_hosts)} in-scope host(s) of {_target}.")
+                        sweep_report = sweep_cidr(
+                            GUARD, AUDIT, LEDGER, NMAP_ADAPTERS, _target, ports, sweep_hosts,
+                            requester="analyst",
+                        )
+                        sc1, sc2, sc3 = st.columns(3)
+                        sc1.metric("Hosts in scope", len(sweep_hosts))
+                        sc2.metric("Scanned", sweep_report.scanned)
+                        sc3.metric("Denied", sweep_report.denied)
+                        st.markdown("**Per-host results**")
+                        st.dataframe([row.model_dump() for row in sweep_report.results], hide_index=True, use_container_width=True)
+                        if sweep_report.services:
+                            st.session_state.observations.extend(sweep_report.services)
+                            st.success(f"Discovered {len(sweep_report.services)} service(s) across the range.")
+                        else:
+                            st.info("No active ports found across the swept range.")
                 else:
-                    adapters = NMAP_ADAPTERS
-                result = execute_action(action, GUARD, AUDIT, LEDGER, adapters)
-                source_label = "imported" if _source_mode == "Import XML" else "live"
+                    if _source_mode == "Web security scan":
+                        action = Action(
+                            id=uuid.uuid4().hex,
+                            name=ActionName.WEB_SCAN,
+                            target=_target,
+                            ports=ports,
+                            arguments={},
+                            engagement_id=GUARD.policy.engagement,
+                            requested_by="analyst",
+                        )
+                        adapters = WEB_ADAPTERS
+                    else:
+                        action = Action(
+                            id=uuid.uuid4().hex,
+                            name=ActionName.NMAP_SCAN,
+                            target=_target,
+                            ports=ports,
+                            arguments={
+                                "service_detection": True,
+                                "skip_host_discovery": _skip_ping,
+                                "timing": 2,
+                                "host_timeout_seconds": 60,
+                            },
+                            engagement_id=GUARD.policy.engagement,
+                            requested_by="analyst",
+                        )
+                        if _source_mode == "Import XML":
+                            action.name = ActionName.IMPORT_NMAP_XML
+                            adapters = {ActionName.IMPORT_NMAP_XML: RecordedNmapXMLAdapter(_xml.getvalue())}
+                        else:
+                            adapters = NMAP_ADAPTERS
+                    result = execute_action(action, GUARD, AUDIT, LEDGER, adapters)
+                    source_label = "imported" if _source_mode == "Import XML" else "live"
 
-                rc1, rc2, rc3 = st.columns(3)
-                rc1.metric("Scope", "Authorized" if result.decision.allowed else "Denied")
-                rc2.metric("Status", result.status.upper())
-                rc3.metric("Evidence ID", result.evidence_id or "—")
+                    rc1, rc2, rc3 = st.columns(3)
+                    rc1.metric("Scope", "Authorized" if result.decision.allowed else "Denied")
+                    rc2.metric("Status", result.status.upper())
+                    rc3.metric("Evidence ID", result.evidence_id or "—")
 
-                # Verbose lines for audit trail (also consumed by AppTests)
-                st.write(f"Scope allowed: **{result.decision.allowed}**")
-                st.write(f"Reason: {result.decision.reason}")
-                st.write(f"Status: `{result.status}` · source mode: **{source_label}**")
-                st.write(f"Evidence ID: `{result.evidence_id or 'none'}`")
+                    # Verbose lines for audit trail (also consumed by AppTests)
+                    st.write(f"Scope allowed: **{result.decision.allowed}**")
+                    st.write(f"Reason: {result.decision.reason}")
+                    st.write(f"Status: `{result.status}` · source mode: **{source_label}**")
+                    st.write(f"Evidence ID: `{result.evidence_id or 'none'}`")
 
-                if result.decision.allowed:
-                    st.success(result.decision.reason)
-                else:
-                    st.error("Denied by Scope Guard: " + result.decision.reason)
+                    if result.decision.allowed:
+                        st.success(result.decision.reason)
+                    else:
+                        st.error("Denied by Scope Guard: " + result.decision.reason)
 
-                if result.services:
-                    st.session_state.observations.extend(result.services)
-                    st.markdown("**Discovered Services**")
-                    st.dataframe([s.model_dump() for s in result.services], hide_index=True, use_container_width=True)
-                else:
-                    st.info("No active ports found in the specified range.")
+                    if _source_mode == "Web security scan":
+                        st.session_state.tool_ingestion_status["ProofPath Web Scan"] = {
+                            "count": len(result.findings),
+                            "evidence_id": result.evidence_id or "",
+                            "status": result.status,
+                        }
+
+                    if result.findings:
+                        _append_findings(result.findings)
+                        st.markdown(f"**Web security findings — {len(result.findings)}**")
+                        _show_finding_table(result.findings)
+
+                    if _source_mode == "Web security scan":
+                        _render_tool_coverage(_tool_coverage_slot)
+                        if result.status != "ok":
+                            st.warning(
+                                f"Web Scan did not complete successfully (status: {result.status}). "
+                                f"No clean result can be concluded. Review evidence "
+                                f"{result.evidence_id or 'not recorded'} for endpoint errors."
+                            )
+                        elif not result.findings:
+                            st.info("No web security issues detected on the probed endpoint(s).")
+                    elif result.services:
+                        st.session_state.observations.extend(result.services)
+                        st.markdown("**Discovered Services**")
+                        st.dataframe([s.model_dump() for s in result.services], hide_index=True, use_container_width=True)
+                    else:
+                        st.info("No active ports found in the specified range.")
             except ValueError as exc:
                 st.error(str(exc))
 
@@ -1267,6 +1388,19 @@ with tab_risk:
                 })
             st.caption(f"Risk table rendered · {len(ranked)} ranked finding(s)")
             st.dataframe(rows, hide_index=True, use_container_width=True)
+
+            st.markdown("#### Attack Surface Heatmap")
+            st.caption("Findings per asset by severity — darker cells hold more findings.")
+            _heatmap = heatmap_html(findings_for_risk)
+            if _heatmap:
+                st.markdown(_heatmap, unsafe_allow_html=True)
+
+            st.markdown("#### MITRE ATT&CK Technique Coverage")
+            _coverage = attack_coverage(findings_for_risk)
+            if _coverage:
+                st.markdown(attack_bars_html(findings_for_risk), unsafe_allow_html=True)
+            else:
+                st.caption("No ATT&CK technique mappings are present in the current findings.")
     else:
         st.markdown(
             '<div style="border:1px dashed rgba(255,255,255,0.1);border-radius:10px;padding:2rem;'
@@ -1280,7 +1414,74 @@ with tab_risk:
 
 
 # ===========================================================================
-# TAB 6 — Approvals
+# TAB 6 — Retest / Remediation Verification
+# ===========================================================================
+with tab_retest:
+    st.subheader("Retest & Remediation Verification")
+    st.caption(
+        "Snapshot the current correlated findings as a baseline, then re-run your scans and compare. "
+        "The comparison is deterministic: it matches findings on the correlation key, not on free text."
+    )
+
+    _retest_current = correlate_findings(st.session_state.raw_findings, st.session_state.observations)
+    _retest_baseline = st.session_state.retest_baseline
+
+    rc1, rc2 = st.columns(2)
+    rc1.metric("Current findings", len(_retest_current))
+    rc2.metric("Baseline findings", len(_retest_baseline) if _retest_baseline is not None else "—")
+
+    if st.button("Snapshot current findings as baseline", disabled=not _retest_current, use_container_width=True):
+        st.session_state.retest_baseline = [f.model_copy(deep=True) for f in _retest_current]
+        st.session_state.retest_label = datetime.now(timezone.utc).isoformat()[:19].replace("T", " ") + " UTC"
+        st.session_state.retest_diff = None
+        AUDIT.append("retest_baseline", "analyst", {
+            "count": len(_retest_current), "finding_ids": [f.id for f in _retest_current],
+        })
+        st.success(f"Baseline recorded — {len(_retest_current)} finding(s).")
+        st.rerun()
+
+    if _retest_baseline is not None:
+        st.caption(f"Baseline captured {st.session_state.retest_label}.")
+        if st.button("Compare current findings to baseline", use_container_width=True, type="primary"):
+            diff = compare_assessments(_retest_baseline, _retest_current)
+            st.session_state.retest_diff = diff
+            AUDIT.append("retest_compared", "analyst", {
+                "baseline": len(_retest_baseline), "current": len(_retest_current),
+                **diff.summary(),
+            })
+
+    _retest_diff = st.session_state.retest_diff
+    if _retest_diff is not None:
+        dc1, dc2, dc3 = st.columns(3)
+        dc1.metric("Remediated", _retest_diff.total_remediated)
+        dc2.metric("Persisting", _retest_diff.total_persisting)
+        dc3.metric("New", _retest_diff.total_new)
+        _trend = remediation_trend_html(
+            _retest_diff.total_remediated, _retest_diff.total_persisting, _retest_diff.total_new
+        )
+        if _trend:
+            st.markdown(_trend, unsafe_allow_html=True)
+
+        rows = (
+            [{"change": "Remediated", "id": f.id, "severity": f.severity, "asset": f"{f.asset.ip}:{f.port}", "title": f.title}
+             for f in _retest_diff.remediated_findings]
+            + [{"change": "Persisting", "id": curr.id, "severity": curr.severity, "asset": f"{curr.asset.ip}:{curr.port}", "title": curr.title}
+               for _, curr in _retest_diff.persisting_findings]
+            + [{"change": "New", "id": f.id, "severity": f.severity, "asset": f"{f.asset.ip}:{f.port}", "title": f.title}
+               for f in _retest_diff.new_findings]
+        )
+        if rows:
+            st.markdown("**Change detail**")
+            st.dataframe(rows, hide_index=True, use_container_width=True)
+        else:
+            st.info("No findings changed between the baseline and the current state.")
+        st.caption("The Report tab includes this comparison as section 7.8 when a baseline exists.")
+    elif _retest_baseline is None:
+        st.info("No baseline yet. Run your scans, then snapshot the findings to enable comparison.")
+
+
+# ===========================================================================
+# TAB 7 — Approvals
 # ===========================================================================
 with tab_approvals:
     st.subheader("Human Authorization — Active Validation")
@@ -1415,7 +1616,7 @@ with tab_approvals:
 
 
 # ===========================================================================
-# TAB 7 — Report
+# TAB 8 — Report
 # ===========================================================================
 with tab_report:
     st.subheader("Executive & Technical Assessment Report")
@@ -1438,10 +1639,12 @@ with tab_report:
                         scope_cidrs=GUARD.policy.allowed_cidrs,
                         criticality=st.session_state.criticality_by_asset,
                         public_intel=_safe_intel(),
+                        baseline_findings=st.session_state.get("retest_baseline"),
                     )
                     st.session_state.report_path = report_result["path"]
                     st.session_state.report_hash = report_result["sha256"]
                     st.session_state.sarif_path = report_result.get("sarif_path", "")
+                    st.session_state.cef_path = report_result.get("cef_path", "")
                     st.session_state.report_status = (
                         f"Grounded: {report_result['grounded_findings']}/{report_result['total_findings']}"
                     )
@@ -1463,6 +1666,13 @@ with tab_report:
                     st.download_button(
                         "Export SARIF v2.1.0", data=sarif_f.read_bytes(),
                         file_name="proofpath-assessment.sarif", mime="application/json",
+                        use_container_width=True,
+                    )
+                cef_f = Path(st.session_state.get("cef_path", ""))
+                if cef_f.is_file():
+                    st.download_button(
+                        "Export SIEM (CEF)", data=cef_f.read_bytes(),
+                        file_name="proofpath-assessment.cef", mime="text/plain",
                         use_container_width=True,
                     )
 
@@ -1489,7 +1699,7 @@ with tab_report:
 
 
 # ===========================================================================
-# TAB 8 — AI Assistant
+# TAB 9 — AI Assistant
 # ===========================================================================
 with tab_assistant:
     st.subheader("Conversational Security Assistant")
@@ -1594,6 +1804,42 @@ with tab_assistant:
     elif send_clicked:
         st.warning("Type a question first.")
 
+    # ── Grounded Report Q&A — answers restricted to current findings, must cite evidence
+    st.markdown("---")
+    with st.expander("✦ Ask the Report — grounded Q&A (refuses uncited answers)", expanded=False):
+        st.caption(
+            "Answers are restricted to the current findings and must cite their evidence IDs. "
+            "Any uncited or unverifiable claim is rejected and replaced with an evidence-only answer."
+        )
+        _rq = st.text_input(
+            "Question about the current report",
+            key="report_qa_query",
+            placeholder="e.g. 'Which findings affect 10.20.0.10?' or 'Summarize the critical findings'",
+            label_visibility="collapsed",
+        )
+        if st.button("Ask the report", key="btn_report_qa", type="primary") and _rq.strip():
+            _qa_client = None
+            try:
+                _qa_cfg = OllamaConfig.from_yaml(OLLAMA_CONFIG_PATH)
+                if _qa_cfg.model_tag.strip():
+                    _qa_client = OllamaClient(_qa_cfg)
+            except Exception:
+                pass
+            with st.spinner("✦ Grounding the answer in ledger evidence…"):
+                _qa_answer = answer_report_question(
+                    _rq.strip(), merged_findings, st.session_state.observations, LEDGER, AUDIT,
+                    model_client=_qa_client,
+                )
+            st.markdown(_qa_answer.answer)
+            if _qa_answer.cited_evidence_ids:
+                st.caption("Cited evidence: " + ", ".join(_qa_answer.cited_evidence_ids))
+            if _qa_answer.grounded:
+                st.success("Grounded — every claim cites ledger evidence.")
+            else:
+                st.warning("Grounding issues: " + "; ".join(_qa_answer.critique))
+        elif not merged_findings:
+            st.info("No findings are loaded yet. Scan or import a report first.")
+
     # ── Context awareness — show what the assistant knows
     if merged_findings or st.session_state.observations:
         st.markdown("---")
@@ -1612,7 +1858,7 @@ with tab_assistant:
 
 
 # ===========================================================================
-# TAB 9 — Autonomous Agent
+# TAB 10 — Autonomous Agent
 # ===========================================================================
 with tab_agent:
     st.subheader("Autonomous VAPT Agent")

@@ -26,6 +26,7 @@ rate_limits:
   max_host_timeout_seconds: 120
 enabled_actions:
   - nmap_scan
+  - web_scan
   - import_nmap_xml
   - import_nessus
   - import_burp
@@ -50,6 +51,7 @@ tool_arguments:
       type: int
       minimum: 1
       maximum: 120
+  webscan: {}
   nessus: {}
   burp: {}
   openvas: {}

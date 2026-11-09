@@ -30,6 +30,16 @@ from proofpath.threat_intel import PublicThreatIntel
 
 SEVERITIES = ("critical", "high", "medium", "low", "info", "not_provided")
 
+# Planning guidance only — not a contractual remediation commitment.
+_REMEDIATION_HORIZON = {
+    "critical": "immediate (24 hours)",
+    "high": "within 7 days",
+    "medium": "within 30 days",
+    "low": "next maintenance window",
+    "info": "next maintenance window",
+    "not_provided": "triage required",
+}
+
 SEV_COLORS = {
     "critical": colors.HexColor("#ef4444"),
     "high":     colors.HexColor("#f97316"),
@@ -51,6 +61,7 @@ def generate_pdf(
     scope_cidrs: list[str],
     criticality: dict[str, str] | None = None,
     public_intel: PublicThreatIntel | None = None,
+    baseline_findings: list[Finding] | None = None,
 ) -> dict[str, Any]:
     """Create the grounded, deterministic VAPT report."""
     out = Path(output_path)
@@ -127,6 +138,21 @@ def generate_pdf(
         ["Audit entries", str(len(entries_before))],
     ]
     story.append(_table(summary_data, [80 * mm, 80 * mm], styles))
+
+    top_asset_counts: dict[str, int] = {}
+    for finding in findings:
+        top_asset_counts[finding.asset.ip] = top_asset_counts.get(finding.asset.ip, 0) + 1
+    busiest_asset = max(top_asset_counts.items(), key=lambda item: item[1])[0] if top_asset_counts else "none"
+    top_item = ranked[0].finding if ranked else None
+    story.append(Paragraph(
+        f"<b>Key themes.</b> Most affected asset: {_esc(busiest_asset)}. "
+        f"Findings carrying CVE identifiers: {cves_reported}. "
+        f"Suggested remediation window for the top-ranked item "
+        f"({_esc(top_item.id) if top_item else 'none'}): "
+        f"{_REMEDIATION_HORIZON.get(top_item.severity, 'triage required') if top_item else 'not applicable'}. "
+        f"Windows are planning guidance for this engagement, not a contractual commitment.",
+        styles["BodyText"],
+    ))
 
     # ── 7.2 Methodology ──────────────────────────────────────────────────
     _heading(story, "7.2  Assessment Methodology", styles)
@@ -220,6 +246,24 @@ def generate_pdf(
         "Standards references use 'mapped to' wording; they are not a claim of formal compliance.",
         styles["BodyText"],
     ))
+    roadmap_rows = [["Priority", "Finding", "Severity", "Target", "Suggested window", "Score"]]
+    for row in ranked:
+        roadmap_rows.append([
+            str(row.rank),
+            row.finding.id,
+            row.finding.severity.upper(),
+            f"{row.finding.asset.ip}:{row.finding.port}",
+            _REMEDIATION_HORIZON.get(row.finding.severity, "triage required"),
+            str(row.priority_score) if row.priority_score is not None else "N/A",
+        ])
+    if len(roadmap_rows) > 1:
+        story.append(Paragraph(
+            "<b>Prioritised remediation roadmap</b> — highest computed risk first. "
+            "Windows are planning guidance, not a contractual commitment.",
+            styles["Small"],
+        ))
+        story.append(_table(roadmap_rows, [18*mm, 24*mm, 20*mm, 34*mm, 48*mm, 23*mm], styles, wide=True))
+        story.append(Spacer(1, 3*mm))
     for finding in findings:
         refs = ", ".join(finding.mapped_to) or "no standards mapping in source data"
         impact = {
@@ -260,6 +304,24 @@ def generate_pdf(
     story.append(_table(fw_rows, [38*mm, 22*mm, 123*mm], styles))
     story.append(Spacer(1, 3*mm))
 
+    # ── ATT&CK / OWASP / NIST coverage (mapped from observed CWEs) ─────────
+    coverage: dict[str, int] = {}
+    for finding in findings:
+        for mapping in finding.mapped_to:
+            coverage[mapping] = coverage.get(mapping, 0) + 1
+    if coverage:
+        story.append(Paragraph(
+            "<b>Observed coverage — standards mapped to each finding.</b> "
+            "Entries are derived from tool-reported CWE identifiers using 'mapped to' wording; "
+            "an entry is a mapping of the finding, not a claim of formal compliance.",
+            styles["Small"],
+        ))
+        cov_rows = [["Framework entry (mapped to)", "Findings"]]
+        for mapping, count in sorted(coverage.items(), key=lambda kv: (-kv[1], kv[0])):
+            cov_rows.append([mapping, str(count)])
+        story.append(_table(cov_rows, [143*mm, 40*mm], styles))
+        story.append(Spacer(1, 3*mm))
+
     # ── 7.7 Assessment Limitations ────────────────────────────────────────
     _heading(story, "7.7  Assessment Limitations", styles)
     limitations = [
@@ -276,9 +338,54 @@ def generate_pdf(
     for line in limitations:
         story.append(Paragraph(f"• {_esc(line)}", styles["Small"]))
 
+    # ── 7.8 Remediation Status (Retest) ───────────────────────────────────
+    if baseline_findings is not None:
+        from proofpath.diff import compare_assessments
+        delta = compare_assessments(baseline_findings, findings)
+        _heading(story, "7.8  Remediation Status (Retest vs Baseline)", styles)
+        story.append(Paragraph(
+            f"Compared {len(baseline_findings)} baseline finding(s) against {len(findings)} current finding(s) "
+            f"using the deterministic correlation key. <b>{delta.total_remediated} remediated</b>, "
+            f"{delta.total_persisting} persisting, {delta.total_new} new.",
+            styles["BodyText"],
+        ))
+        delta_rows = [["Change", "ID", "Severity", "Asset", "Title", "Note"]]
+        for base_f in delta.remediated_findings:
+            delta_rows.append([
+                "Remediated", base_f.id, base_f.severity.upper(), f"{base_f.asset.ip}:{base_f.port}",
+                base_f.title[:40], "in baseline, resolved or absent now",
+            ])
+        for base_f, curr_f in delta.persisting_findings:
+            note = (
+                f"severity {base_f.severity} -> {curr_f.severity}"
+                if base_f.severity != curr_f.severity else "unchanged"
+            )
+            delta_rows.append([
+                "Persisting", curr_f.id, curr_f.severity.upper(), f"{curr_f.asset.ip}:{curr_f.port}",
+                curr_f.title[:40], note,
+            ])
+        for new_f in delta.new_findings:
+            delta_rows.append([
+                "New", new_f.id, new_f.severity.upper(), f"{new_f.asset.ip}:{new_f.port}",
+                new_f.title[:40], "not present in baseline",
+            ])
+        story.append(_table(delta_rows, [20*mm, 26*mm, 18*mm, 26*mm, 60*mm, 33*mm], styles, wide=True))
+        story.append(Spacer(1, 2*mm))
+
     # ── Appendices ────────────────────────────────────────────────────────
     story.append(PageBreak())
     _heading(story, "Appendix A: Evidence Index", styles)
+    idx_rows = [["Finding", "Severity", "Evidence ID", "Locator"]]
+    for finding in findings:
+        if not finding.evidence:
+            idx_rows.append([finding.id, finding.severity.upper(), "—", "no evidence refs recorded"])
+        for ref in finding.evidence:
+            idx_rows.append([finding.id, finding.severity.upper(), ref.evidence_id, (ref.locator or "")[:90]])
+    if len(idx_rows) > 1:
+        story.append(Paragraph("<b>Finding → evidence cross-reference</b>", styles["Small"]))
+        story.append(_table(idx_rows, [28*mm, 20*mm, 30*mm, 105*mm], styles, wide=True))
+        story.append(Spacer(1, 3*mm))
+    story.append(Paragraph("<b>Evidence artifacts (content-addressed)</b>", styles["Small"]))
     ev_rows = [["Evidence ID", "Tool", "Mode", "SHA-256 (first 16)", "Captured at", "Filename"]]
     for ev in evidence_records.values():
         ev_rows.append([ev.id, ev.tool, ev.source_mode, ev.sha256[:16] + "…", ev.captured_at.isoformat()[:19], Path(ev.artifact_path).name])
@@ -308,8 +415,11 @@ def generate_pdf(
         json.dumps([f.model_dump(mode="json") for f in findings], indent=2), encoding="utf-8"
     )
     from proofpath.report.sarif import export_sarif
+    from proofpath.report.cef import write_cef
     sarif_path = out.parent / "assessment.sarif"
     export_sarif(findings, sarif_path)
+    cef_path = out.parent / "assessment.cef"
+    write_cef(findings, cef_path)
     audit.append("report_generated", "analyst", {
         "report_path": str(out.resolve()), "report_sha256": digest,
         "finding_ids": [f.id for f in findings],
@@ -317,11 +427,13 @@ def generate_pdf(
         "source_label": "synthetic" if synthetic else "imported" if imported else "live",
         "audit_chain_head_in_report": prior_chain_head,
         "sarif_path": str(sarif_path.resolve()),
+        "cef_path": str(cef_path.resolve()),
     })
     return {
         "path": str(out), "sha256": digest, "evidence_ids": evidence_ids,
         "grounded_findings": len(grounded), "total_findings": len(findings),
         "severity_counts": severity_counts, "sarif_path": str(sarif_path),
+        "cef_path": str(cef_path),
     }
 
 
