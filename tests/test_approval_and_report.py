@@ -150,7 +150,7 @@ def test_report_sections_evidence_trace_import_label_and_hash(tmp_path: Path) ->
     pdf = tmp_path / "report.pdf"
     result = generate_pdf([finding], [], ledger, audit, pdf, engagement="test", scope_cidrs=["10.10.1.0/24"])
     text = "\n".join(page.extract_text() or "" for page in PdfReader(str(pdf)).pages)
-    section_titles = ["7.1 Executive summary", "7.2 Methodology", "7.3 Severity distribution", "7.4 Detailed findings", "7.5 Impact and remediation", "7.6 Assessment limitations", "Appendix A: evidence index", "Appendix B: integration status matrix", "Appendix C: audit and report hashes"]
+    section_titles = ["7.1 Executive Summary", "7.2 Assessment Methodology", "7.3 Severity Distribution & Risk Prioritization", "7.4 Detailed Vulnerability Findings", "7.5 Impact & Actionable Remediation", "7.6 Standards & Reference Frameworks", "7.7 Assessment Limitations", "Appendix A: Evidence Index", "Appendix B: Integration Status Matrix", "Appendix C: Audit & Report Hashes"]
     positions = [text.index(title) for title in section_titles]
     assert positions == sorted(positions)
     assert ev.id in text and "/ReportItem[1]" in text and "port=\"80\"" in text

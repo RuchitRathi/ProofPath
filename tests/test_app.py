@@ -18,10 +18,11 @@ def _submit(target: str, monkeypatch, ports: str = "80") -> str:
 
     monkeypatch.setattr(subprocess, "run", missing_nmap)
     app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=10).run()
-    app.text_input[0].set_value("List services")
-    app.text_input[1].set_value(target)
-    app.text_input[2].set_value(ports)
-    app.button[0].click().run()
+    # Use label-based lookup — robust to tab reordering
+    next(w for w in app.text_input if w.label == "Operational Objective").set_value("List services")
+    next(w for w in app.text_input if w.label == "Target IP / Hostname").set_value(target)
+    next(w for w in app.text_input if w.label == "Ports (comma-separated)").set_value(ports)
+    next(b for b in app.button if b.label == "Run Reconnaissance").click().run()
     visible = [element.value for element in app.text if isinstance(element.value, str)]
     visible.extend(element.value for element in app.markdown if isinstance(element.value, str))
     visible.extend(element.value for element in app.error if isinstance(element.value, str))
@@ -69,7 +70,7 @@ def _import_upload(name: str, data: bytes) -> AppTest:
     app.session_state["nessus_import_file"] = UploadedFile(
         UploadedFileRec(f"test-{name}", name, "application/xml", data), None
     )
-    app.button[1].click().run()
+    next(b for b in app.button if b.label == "Ingest Nessus").click().run()
     return app
 
 

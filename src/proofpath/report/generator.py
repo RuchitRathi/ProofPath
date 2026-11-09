@@ -10,13 +10,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from reportlab.graphics.charts.barcharts import VerticalBarChart
-from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.shapes import Drawing, String
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import (
+    HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+)
 
 from proofpath.audit import AuditLog
 from proofpath.grounding import verify_finding
@@ -27,6 +29,15 @@ from proofpath.threat_intel import PublicThreatIntel
 
 
 SEVERITIES = ("critical", "high", "medium", "low", "info", "not_provided")
+
+SEV_COLORS = {
+    "critical": colors.HexColor("#ef4444"),
+    "high":     colors.HexColor("#f97316"),
+    "medium":   colors.HexColor("#eab308"),
+    "low":      colors.HexColor("#3b82f6"),
+    "info":     colors.HexColor("#94a3b8"),
+    "not_provided": colors.HexColor("#64748b"),
+}
 
 
 def generate_pdf(
@@ -41,131 +52,294 @@ def generate_pdf(
     criticality: dict[str, str] | None = None,
     public_intel: PublicThreatIntel | None = None,
 ) -> dict[str, Any]:
-    """Create the template report, validating every finding before rendering."""
+    """Create the grounded, deterministic VAPT report."""
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+
+    # Grounding pass
     grounded: list[Finding] = []
     for finding in findings:
         result = verify_finding(finding, ledger, audit)
         if result.accepted:
             grounded.append(finding)
-    ranked = rank_findings(findings, observations, criticality, public_intel)  # show rejected items with fallback evidence-only labels
-    evidence_ids = sorted({ref.evidence_id for finding in findings for ref in finding.evidence})
-    evidence_records = {item: ledger.load(item) for item in evidence_ids}
-    evidence_hashes = {item: evidence_records[item].sha256 for item in evidence_ids}
+
+    ranked = rank_findings(findings, observations, criticality, public_intel)
+    evidence_ids = sorted({ref.evidence_id for f in findings for ref in f.evidence})
+    evidence_records = {eid: ledger.load(eid) for eid in evidence_ids}
+    evidence_hashes = {eid: evidence_records[eid].sha256 for eid in evidence_ids}
     entries_before = audit.read_entries()
     prior_chain_head = entries_before[-1].entry_hash if entries_before else "0" * 64
     timestamp = datetime.now(timezone.utc).isoformat()
     integration_rows = _integration_rows()
-    severity_counts = {severity: sum(item.severity == severity for item in findings) for severity in SEVERITIES}
-    failures = [entry for entry in entries_before if entry.event_type in {"tool_error", "nmap_result"} and entry.details.get("status") in {"error", "timeout", "tool_not_found"}]
-    approvals = [entry for entry in entries_before if entry.event_type in {"approval_requested", "approval_decision", "active_validation_outcome"}]
-    imported = any(item.source_mode == "imported" for item in evidence_records.values())
+    severity_counts = {s: sum(f.severity == s for f in findings) for s in SEVERITIES}
+    failures = [e for e in entries_before if e.event_type in {"tool_error", "nmap_result"} and e.details.get("status") in {"error", "timeout", "tool_not_found"}]
+    approvals = [e for e in entries_before if e.event_type in {"approval_requested", "approval_decision", "active_validation_outcome"}]
+    imported = any(ev.source_mode == "imported" for ev in evidence_records.values())
     synthetic = any(
-        "synthetic" in item.summary.casefold()
-        or b"synthetic" in ledger.read_bytes(item.id).lower()
-        for item in evidence_records.values()
+        "synthetic" in ev.summary.casefold() or b"synthetic" in ledger.read_bytes(ev.id).lower()
+        for ev in evidence_records.values()
     )
 
-    styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="Small", parent=styles["BodyText"], fontSize=7, leading=9, wordWrap="CJK"))
-    styles.add(ParagraphStyle(name="Cell", parent=styles["BodyText"], fontSize=8, leading=10, wordWrap="CJK"))
-    story: list[Any] = [Paragraph("ProofPath Security Assessment", styles["Title"]), Paragraph(f"Engagement: {_esc(engagement)} · Generated: {_esc(timestamp)}", styles["Normal"]), Spacer(1, 5 * mm)]
+    styles = _build_styles()
+    story: list[Any] = []
 
-    _heading(story, "7.1 Executive summary and scope", styles)
-    top = ", ".join(f"{row.finding.id} ({row.finding.severity})" for row in ranked[:3]) or "None"
-    overall = f"{len(findings)} reported finding(s) are present; no system-wide safe/unsafe verdict is inferred." if findings else "No findings are recorded; no system-wide safe/unsafe verdict is inferred."
-    summary = f"{len(findings)} finding(s); {sum(bool(f.cves) for f in findings)} with reported CVE identifiers. Top prioritized findings: {top}. Overall assessment: {overall} Assessment scope: {', '.join(scope_cidrs) or 'not provided'}. This report reflects only cited ledger records and configured integration status."
-    story.append(Paragraph(_esc(summary), styles["BodyText"]))
+    # ── Cover block ──────────────────────────────────────────────────────
+    story.append(Spacer(1, 8 * mm))
+    story.append(Paragraph("CONFIDENTIAL — AUTHORISED SECURITY ASSESSMENT", styles["Kicker"]))
+    story.append(Paragraph("ProofPath VAPT Report", styles["CoverTitle"]))
+    story.append(Paragraph(
+        f"Engagement: <b>{_esc(engagement)}</b> &nbsp;·&nbsp; "
+        f"Generated: <b>{_esc(timestamp[:19].replace('T', ' '))} UTC</b> &nbsp;·&nbsp; "
+        f"Scope: <b>{_esc(', '.join(scope_cidrs) or 'not provided')}</b>",
+        styles["CoverSub"],
+    ))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#0284c7"), spaceAfter=6 * mm))
 
-    _heading(story, "7.2 Methodology", styles)
-    story.append(Paragraph("Rules of engagement: targets and ports are checked against the engagement scope. Active validation is limited to a separately approved GET/HEAD request on an allowlisted path. No exploit payloads are sent.", styles["BodyText"]))
-    assets_tested = sorted({f.asset.ip for f in findings} | {row.ip for row in observations})
-    story.append(Paragraph("Assets represented in observations or findings: " + _esc(", ".join(assets_tested) or "none"), styles["BodyText"]))
-    story.append(Paragraph("Tool execution summary and status matrix:", styles["BodyText"]))
-    matrix = [["Tool", "Status", "Execution/source note"]]
-    matrix.extend([[row["tool"], row["mode"], row["limitation"]] for row in integration_rows])
+    # ── 7.1 Executive Summary ────────────────────────────────────────────
+    _heading(story, "7.1  Executive Summary", styles)
+    crit_count = severity_counts.get("critical", 0)
+    high_count = severity_counts.get("high", 0)
+    top_findings = ", ".join(f"{r.finding.id} ({r.finding.severity})" for r in ranked[:3]) or "None"
+    overall = (
+        f"{len(findings)} finding(s) identified across {len({f.asset.ip for f in findings})} asset(s). "
+        f"{crit_count} critical and {high_count} high severity findings require immediate remediation. "
+        f"Top priority findings: {top_findings}. "
+        f"Assessment scope: {', '.join(scope_cidrs) or 'not provided'}. "
+        f"No system-wide safe/unsafe verdict is inferred from this report — findings reflect only cited ledger evidence."
+    )
+    story.append(Paragraph(_esc(overall), styles["BodyText"]))
+    story.append(Spacer(1, 3 * mm))
+
+    # Summary metrics table
+    multi_tool = sum(1 for f in findings if len(f.source_tools) > 1)
+    confirmed = sum(1 for f in findings if f.status == "confirmed")
+    fp_cands = sum(1 for f in findings if f.status == "false_positive_candidate")
+    cves_reported = sum(1 for f in findings if f.cves)
+    summary_data = [
+        ["Metric", "Value"],
+        ["Total correlated findings", str(len(findings))],
+        ["Critical / High / Medium / Low", f"{severity_counts.get('critical',0)} / {severity_counts.get('high',0)} / {severity_counts.get('medium',0)} / {severity_counts.get('low',0)}"],
+        ["Confirmed findings (multi-tool)", str(confirmed)],
+        ["Multi-tool corroborated", str(multi_tool)],
+        ["False-positive candidates", str(fp_cands)],
+        ["Findings with CVE identifiers", str(cves_reported)],
+        ["Grounded by AI verifier", str(len(grounded))],
+        ["Audit entries", str(len(entries_before))],
+    ]
+    story.append(_table(summary_data, [80 * mm, 80 * mm], styles))
+
+    # ── 7.2 Methodology ──────────────────────────────────────────────────
+    _heading(story, "7.2  Assessment Methodology", styles)
+    story.append(Paragraph(
+        "Rules of engagement: all targets are validated against the engagement scope policy before any "
+        "action is taken. Active validation is limited to a human-approved, single-use GET/HEAD request "
+        "on an allowlisted path. No exploit payloads, shell commands, or unapproved network traffic are sent.",
+        styles["BodyText"],
+    ))
+    assets_tested = sorted({f.asset.ip for f in findings} | {o.ip for o in observations})
+    story.append(Paragraph(f"<b>Assets tested:</b> {_esc(', '.join(assets_tested) or 'none')}", styles["BodyText"]))
+    story.append(Paragraph("<b>Tool execution and source matrix:</b>", styles["BodyText"]))
+    matrix = [["Tool", "Status", "Source note"]]
+    matrix.extend([[r["tool"], r["mode"], r["limitation"][:120]] for r in integration_rows])
     for ev in evidence_records.values():
-        matrix.append([ev.tool, "Live" if ev.source_mode == "live" else "Import-only", ("imported, not live-executed; " if ev.source_mode == "imported" else "live evidence; ") + ev.summary])
-    story.append(_table(matrix, [35 * mm, 23 * mm, 125 * mm], styles))
+        note = ("imported, not live-executed — " if ev.source_mode == "imported" else "live evidence — ") + ev.summary[:80]
+        matrix.append([ev.tool, "Live" if ev.source_mode == "live" else "Import-only", note])
+    story.append(_table(matrix, [35 * mm, 25 * mm, 123 * mm], styles))
 
-    _heading(story, "7.3 Severity distribution and prioritized findings", styles)
+    # ── 7.3 Severity Distribution ─────────────────────────────────────────
+    _heading(story, "7.3  Severity Distribution & Risk Prioritization", styles)
     story.append(_severity_chart(severity_counts))
-    risk_rows = [["Rank", "ID", "Severity/CVSS", "Status", "Score", "Factor breakdown (value · source · weight)"]]
+    risk_rows = [["Rank", "ID", "Title", "Asset", "Sev / CVSS", "Status", "Score", "Key Risk Factors"]]
     for row in ranked:
-        cvss = f"{row.finding.severity} / {row.finding.cvss:.1f}" if row.finding.cvss is not None else f"{row.finding.severity} / not provided"
-        factors = "; ".join(f"{f.name}: {f.value} · {f.source} · {f.weight:.0%}" for f in row.factors)
-        risk_rows.append([str(row.rank), row.finding.id, cvss, row.status_label, str(row.priority_score) if row.priority_score is not None else "not scored", factors])
-    story.append(_table(risk_rows, [12 * mm, 22 * mm, 30 * mm, 25 * mm, 18 * mm, 78 * mm], styles, wide=True))
+        cvss_str = f"{row.finding.cvss:.1f}" if row.finding.cvss is not None else "N/A"
+        key_factors = "; ".join(
+            f"{f.name}={f.value}"
+            for f in row.factors
+            if f.included and f.normalized is not None and f.normalized > 0.5
+        )[:100]
+        risk_rows.append([
+            str(row.rank),
+            row.finding.id,
+            row.finding.title[:40],
+            row.finding.asset.ip,
+            f"{row.finding.severity.upper()} / {cvss_str}",
+            row.status_label,
+            str(row.priority_score) if row.priority_score is not None else "N/A",
+            key_factors or "—",
+        ])
+    story.append(_table(risk_rows, [10*mm, 22*mm, 40*mm, 22*mm, 22*mm, 22*mm, 14*mm, 31*mm], styles, wide=True))
 
-    _heading(story, "7.4 Detailed findings", styles)
-    for index, finding in enumerate(findings, 1):
-        grounding = "grounded" if finding in grounded else "AI inference omitted; evidence-only template fallback"
-        story.append(Paragraph(f"<b>{index}. {_esc(finding.id)} — {_esc(finding.title)}</b>", styles["Heading3"]))
-        story.append(Paragraph(f"Asset: {_esc(finding.asset.ip)} · Port: {finding.port}/{_esc(finding.protocol)} · Severity/CVSS: {_esc(finding.severity)} / {_esc(f'{finding.cvss:.1f}' if finding.cvss is not None else 'not provided')} · CVE: {_esc(', '.join(finding.cves) or 'not provided')} · CWE: {_esc(', '.join(finding.cwes) or 'not provided')}", styles["BodyText"]))
-        story.append(Paragraph(f"Observed: {_esc(finding.observed)}", styles["BodyText"]))
-        if finding.inference and finding in grounded:
-            story.append(Paragraph("AI inference: " + _esc(finding.inference), styles["BodyText"]))
-        story.append(Paragraph(f"Confidence: {_esc(finding.confidence)} · Status: {_esc(finding.status)} · Validation: {_esc(finding.validation_status)} · Grounding: {grounding}", styles["BodyText"]))
+    # ── 7.4 Detailed Findings ─────────────────────────────────────────────
+    _heading(story, "7.4  Detailed Vulnerability Findings", styles)
+    for idx, finding in enumerate(findings, 1):
+        is_grounded = finding in grounded
+        grounding_label = "Grounded ✔" if is_grounded else "Evidence-only (AI inference omitted)"
+        # Finding header row
+        sev_color = SEV_COLORS.get(finding.severity, colors.HexColor("#94a3b8"))
+        story.append(Paragraph(
+            f"<b>{idx}. [{finding.severity.upper()}] {_esc(finding.id)} — {_esc(finding.title)}</b>",
+            styles["FindingHeader"],
+        ))
+        # Key attributes
+        attrs = [
+            ["Asset", f"{finding.asset.ip}:{finding.port}/{finding.protocol}"],
+            ["Service", finding.service or "not reported"],
+            ["CVE(s)", ", ".join(finding.cves) or "not provided"],
+            ["CWE(s)", ", ".join(finding.cwes) or "not provided"],
+            ["CVSS", f"{finding.cvss:.1f}" if finding.cvss is not None else "not provided"],
+            ["Confidence", finding.confidence.title()],
+            ["Status", finding.status.replace("_", " ").title()],
+            ["Validation", finding.validation_status.replace("_", " ").title()],
+            ["Sources", ", ".join(finding.source_tools)],
+            ["Grounding", grounding_label],
+        ]
+        story.append(_table(attrs, [35*mm, 148*mm], styles))
+        story.append(Paragraph(f"<b>Observed:</b> {_esc(finding.observed)}", styles["Small"]))
+        if finding.inference and is_grounded:
+            story.append(Paragraph(f"<b>AI Inference (grounded):</b> {_esc(finding.inference)}", styles["Small"]))
+        if finding.conflict_notes:
+            story.append(Paragraph(f"<b>Cross-tool conflicts:</b> {_esc(' | '.join(finding.conflict_notes))}", styles["Small"]))
+        # Standards mapping
+        if finding.mapped_to:
+            story.append(Paragraph(f"<b>Mapped to:</b> {_esc(', '.join(finding.mapped_to))}", styles["Small"]))
+        # Evidence refs
         for ref in finding.evidence:
-            story.append(Paragraph(f"Evidence {_esc(ref.evidence_id)} · locator {_esc(ref.locator)} · verbatim excerpt: {_esc(ref.excerpt)}", styles["Small"]))
+            story.append(Paragraph(
+                f"<b>Evidence</b> <font color='#2563eb'>{_esc(ref.evidence_id)}</font> · "
+                f"locator: <font face='Courier'>{_esc(ref.locator)}</font> · "
+                f"excerpt: {_esc((ref.excerpt or '')[:200])}",
+                styles["Small"],
+            ))
+        story.append(Spacer(1, 3 * mm))
 
-    _heading(story, "7.5 Impact and remediation", styles)
-    story.append(Paragraph("Technical and business impact is grounded in the tool-reported finding details, CVSS vectors, and exposure states. Actionable remediation recommendations prioritize defense-in-depth, configuration hardening, and vendor security updates. Standards references are shown as mapped to only when present in the source finding.", styles["BodyText"]))
+    # ── 7.5 Impact & Remediation ──────────────────────────────────────────
+    _heading(story, "7.5  Impact & Actionable Remediation", styles)
+    story.append(Paragraph(
+        "Impact assessments are grounded in tool-reported severity, CVSS vectors, and observed exposure states. "
+        "Remediation recommendations prioritize defense-in-depth, configuration hardening, and vendor security updates. "
+        "Standards references use 'mapped to' wording; they are not a claim of formal compliance.",
+        styles["BodyText"],
+    ))
     for finding in findings:
-        refs = ", ".join(finding.mapped_to) or "no standards mapping provided"
-        impact_desc = (
-            "Critical business impact: Potential for remote code execution, full host compromise, or systemic data breach."
-            if finding.severity == "critical"
-            else "High impact: Exposure of sensitive assets, unauthorized manipulation, or potential lateral movement."
-            if finding.severity == "high"
-            else "Medium impact: Application or network misconfiguration potentially facilitating unauthorized information disclosure."
-            if finding.severity == "medium"
-            else "Low/Informational: Hardening opportunity or diagnostic disclosure."
-        )
+        refs = ", ".join(finding.mapped_to) or "no standards mapping in source data"
+        impact = {
+            "critical": "Critical — potential for remote code execution, full host compromise, or systemic data breach. Immediate remediation required.",
+            "high":     "High — exposure of sensitive assets, unauthorized manipulation, or lateral movement risk. Remediate within 7 days.",
+            "medium":   "Medium — misconfiguration or weakness facilitating information disclosure. Remediate within 30 days.",
+        }.get(finding.severity, "Low/Informational — hardening opportunity. Address in next maintenance window.")
         cve_str = f" for {', '.join(finding.cves)}" if finding.cves else ""
-        remediation_desc = f"Apply current vendor security updates{cve_str}, review service configuration on port {finding.port}, enforce defensive input validation, and verify network ingress controls."
-        story.append(Paragraph(f"<b>{_esc(finding.id)} — {_esc(finding.title)}</b> (Severity: {_esc(finding.severity.upper())})", styles["Heading3"]))
-        story.append(Paragraph(f"<b>Impact:</b> {_esc(impact_desc)}", styles["Small"]))
-        story.append(Paragraph(f"<b>Actionable remediation:</b> {_esc(remediation_desc)}", styles["Small"]))
-        story.append(Paragraph(f"<b>Standards alignment:</b> {_esc(refs)}", styles["Small"]))
-        story.append(Spacer(1, 1 * mm))
+        remediation = (
+            f"1. Apply current vendor security updates{cve_str}. "
+            f"2. Review and harden service configuration on port {finding.port}/{finding.protocol}. "
+            f"3. Enforce input validation and least-privilege access controls. "
+            f"4. Verify network ingress/egress controls for this asset."
+        )
+        story.append(Paragraph(f"<b>{_esc(finding.id)} — {_esc(finding.title)}</b>", styles["Heading3"]))
+        story.append(Paragraph(f"<b>Business &amp; Technical Impact:</b> {_esc(impact)}", styles["Small"]))
+        story.append(Paragraph(f"<b>Actionable Remediation:</b> {_esc(remediation)}", styles["Small"]))
+        story.append(Paragraph(f"<b>Standards Alignment:</b> {_esc(refs)}", styles["Small"]))
+        story.append(Spacer(1, 2 * mm))
 
-    _heading(story, "7.6 Assessment limitations", styles)
-    limitations = ["This report uses synthetic data." if synthetic else "This report uses imported records." if imported else "No imported or synthetic source label was present.", "No external host was contacted during PDF generation.", f"Assessment timestamp: {_esc(timestamp)}."]
-    limitations.extend(f"Approval audit: {entry.event_type} by {entry.actor} at {entry.timestamp}; {entry.details}" for entry in approvals)
-    limitations.extend(f"Recorded scan failure: {entry.event_type} {entry.details}" for entry in failures)
-    limitations.extend(f"Finding {f.id}: status {f.status}." for f in findings if f.status in {"refuted", "false_positive_candidate"})
-    story.extend(Paragraph(_esc(line), styles["Small"]) for line in limitations)
+    # ── 7.6 Standards & Reference Frameworks ─────────────────────────────
+    _heading(story, "7.6  Standards & Reference Frameworks", styles)
+    story.append(Paragraph(
+        "The following standards and frameworks are applied where applicable. "
+        "Use of a framework in this report does not constitute formal compliance with it.",
+        styles["BodyText"],
+    ))
+    fw_rows = [
+        ["Framework", "Version", "Application in this assessment"],
+        ["NIST SP 800-115", "2008", "Lifecycle stages — recon, vulnerability analysis, validation — follow this Technical Guide."],
+        ["OWASP Top 10", "2021", "Web findings from Burp, ZAP, Nikto mapped to OWASP Top 10:2021 where CWE/issue type matches."],
+        ["CVE / NVD", "MITRE/NIST", "CVE identifiers from scanners preserved verbatim. Absent CVEs shown as 'not provided', never fabricated."],
+        ["CVSS v3.1", "FIRST", "Scanner-reported CVSS scores drive risk factor scoring. NVD context fetched for findings without scanner score."],
+        ["CWE", "MITRE", "CWE identifiers from findings preserved in section 7.4 and Appendix A."],
+        ["MITRE ATT&CK", "Enterprise", "Technique IDs (e.g. T1190 Exploit Public-Facing Application) mapped to service exposure and web findings."],
+        ["NIST CSF 2.0", "2024", "Remediation recommendations reference CSF 2.0 functions: Identify, Protect, Detect, Respond, Recover."],
+    ]
+    story.append(_table(fw_rows, [38*mm, 22*mm, 123*mm], styles))
+    story.append(Spacer(1, 3*mm))
 
+    # ── 7.7 Assessment Limitations ────────────────────────────────────────
+    _heading(story, "7.7  Assessment Limitations", styles)
+    limitations = [
+        "This report uses synthetic data." if synthetic else
+        "This report uses imported records." if imported else
+        "Source label not present in evidence records.",
+        "No external host was contacted during report generation.",
+        f"Assessment timestamp (UTC): {timestamp}.",
+        f"Grounded findings: {len(grounded)} of {len(findings)} passed the AI grounding verifier.",
+    ]
+    limitations += [f"Approval audit: {e.event_type} by {e.actor} at {e.timestamp}" for e in approvals]
+    limitations += [f"Scan failure recorded: {e.event_type} — {e.details.get('status','')}" for e in failures]
+    limitations += [f"Finding {f.id} status: {f.status}." for f in findings if f.status in {"refuted", "false_positive_candidate"}]
+    for line in limitations:
+        story.append(Paragraph(f"• {_esc(line)}", styles["Small"]))
+
+    # ── Appendices ────────────────────────────────────────────────────────
     story.append(PageBreak())
-    _heading(story, "Appendix A: evidence index", styles)
-    evidence_rows = [["Evidence ID", "Tool", "Source mode", "SHA-256", "Captured at", "Artifact filename"]]
-    evidence_rows.extend([[ev.id, ev.tool, ev.source_mode, ev.sha256, ev.captured_at.isoformat(), Path(ev.artifact_path).name] for ev in evidence_records.values()])
-    story.append(_table(evidence_rows, [23 * mm, 22 * mm, 22 * mm, 43 * mm, 35 * mm, 30 * mm], styles, wide=True))
-    _heading(story, "Appendix B: integration status matrix", styles)
-    story.append(_table([["Tool", "Status", "Limitation"], *[[r["tool"], r["mode"], r["limitation"]] for r in integration_rows]], [35 * mm, 23 * mm, 125 * mm], styles))
-    _heading(story, "Appendix C: audit and report hashes", styles)
-    story.append(Paragraph(f"Audit chain head before report generation: {prior_chain_head}", styles["Small"]))
-    story.append(Paragraph("The PDF SHA-256 is recorded in the chained report_generated audit event after this file is written.", styles["Small"]))
+    _heading(story, "Appendix A: Evidence Index", styles)
+    ev_rows = [["Evidence ID", "Tool", "Mode", "SHA-256 (first 16)", "Captured at", "Filename"]]
+    for ev in evidence_records.values():
+        ev_rows.append([ev.id, ev.tool, ev.source_mode, ev.sha256[:16] + "…", ev.captured_at.isoformat()[:19], Path(ev.artifact_path).name])
+    story.append(_table(ev_rows, [22*mm, 22*mm, 20*mm, 36*mm, 36*mm, 47*mm], styles, wide=True))
 
-    doc = SimpleDocTemplate(str(out), pagesize=landscape(A4), title="ProofPath Security Assessment", author="ProofPath", topMargin=14 * mm, bottomMargin=14 * mm)
+    _heading(story, "Appendix B: Integration Status Matrix", styles)
+    story.append(_table(
+        [["Tool", "Status", "Limitation"]] + [[r["tool"], r["mode"], r["limitation"][:120]] for r in integration_rows],
+        [35*mm, 25*mm, 123*mm], styles,
+    ))
+
+    _heading(story, "Appendix C: Audit & Report Hashes", styles)
+    story.append(Paragraph(f"Audit chain head before generation: <font face='Courier'>{prior_chain_head}</font>", styles["Small"]))
+    story.append(Paragraph("PDF SHA-256 is recorded in the chained <b>report_generated</b> audit event after this file is written.", styles["Small"]))
+
+    # ── Build ──────────────────────────────────────────────────────────────
+    doc = SimpleDocTemplate(
+        str(out), pagesize=landscape(A4),
+        title="ProofPath Security Assessment Report",
+        author="ProofPath VAPT Platform",
+        subject=f"Engagement {engagement}",
+        topMargin=14*mm, bottomMargin=14*mm, leftMargin=14*mm, rightMargin=14*mm,
+    )
     doc.build(story)
     digest = hashlib.sha256(out.read_bytes()).hexdigest()
-    (out.parent / "current-findings.json").write_text(json.dumps([item.model_dump(mode="json") for item in findings], indent=2), encoding="utf-8")
+    (out.parent / "current-findings.json").write_text(
+        json.dumps([f.model_dump(mode="json") for f in findings], indent=2), encoding="utf-8"
+    )
     from proofpath.report.sarif import export_sarif
     sarif_path = out.parent / "assessment.sarif"
     export_sarif(findings, sarif_path)
     audit.append("report_generated", "analyst", {
-        "report_path": str(out.resolve()), "report_sha256": digest, "finding_ids": [f.id for f in findings],
-        "evidence_ids": evidence_ids, "evidence_hashes": evidence_hashes, "source_label": "synthetic" if synthetic else "imported" if imported else "live",
+        "report_path": str(out.resolve()), "report_sha256": digest,
+        "finding_ids": [f.id for f in findings],
+        "evidence_ids": evidence_ids, "evidence_hashes": evidence_hashes,
+        "source_label": "synthetic" if synthetic else "imported" if imported else "live",
         "audit_chain_head_in_report": prior_chain_head,
         "sarif_path": str(sarif_path.resolve()),
     })
-    return {"path": str(out), "sha256": digest, "evidence_ids": evidence_ids, "grounded_findings": len(grounded), "total_findings": len(findings), "severity_counts": severity_counts, "sarif_path": str(sarif_path)}
+    return {
+        "path": str(out), "sha256": digest, "evidence_ids": evidence_ids,
+        "grounded_findings": len(grounded), "total_findings": len(findings),
+        "severity_counts": severity_counts, "sarif_path": str(sarif_path),
+    }
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+def _build_styles() -> Any:
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="Kicker", parent=styles["Normal"], fontSize=7, textColor=colors.HexColor("#0284c7"), spaceAfter=2, fontName="Helvetica-Bold", letterSpacing=1.5))
+    styles.add(ParagraphStyle(name="CoverTitle", parent=styles["Title"], fontSize=26, textColor=colors.HexColor("#0f172a"), spaceAfter=4))
+    styles.add(ParagraphStyle(name="CoverSub", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#475569"), spaceAfter=4))
+    styles.add(ParagraphStyle(name="Small", parent=styles["BodyText"], fontSize=7.5, leading=10, wordWrap="CJK"))
+    styles.add(ParagraphStyle(name="Cell", parent=styles["BodyText"], fontSize=8, leading=10, wordWrap="CJK"))
+    styles.add(ParagraphStyle(name="FindingHeader", parent=styles["Heading3"], textColor=colors.HexColor("#0f172a"), spaceBefore=4, spaceAfter=2))
+    return styles
 
 
 def _heading(story: list[Any], text: str, styles: Any) -> None:
+    story.append(Spacer(1, 2*mm))
     story.append(Paragraph(_esc(text), styles["Heading2"]))
 
 
@@ -173,27 +347,39 @@ def _table(rows: list[list[str]], widths: list[float], styles: Any, wide: bool =
     data = [[Paragraph(_esc(str(cell)), styles["Cell"]) for cell in row] for row in rows]
     table = Table(data, colWidths=widths, repeatRows=1, hAlign="LEFT")
     table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#23364d")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#aab4c0")),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("BACKGROUND",   (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
+        ("TEXTCOLOR",    (0, 0), (-1, 0), colors.white),
+        ("FONTNAME",     (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE",     (0, 0), (-1, 0), 8),
+        ("GRID",         (0, 0), (-1, -1), 0.3, colors.HexColor("#cbd5e1")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("VALIGN",       (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING",   (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING",(0, 0), (-1, -1), 4),
     ]))
     return table
 
 
 def _severity_chart(counts: dict[str, int]) -> Drawing:
-    drawing = Drawing(440, 170)
+    drawing = Drawing(500, 180)
     chart = VerticalBarChart()
-    chart.x, chart.y, chart.height, chart.width = 42, 30, 120, 370
-    labels = list(SEVERITIES)
-    chart.data = [[counts[label] for label in labels]]
+    chart.x, chart.y, chart.height, chart.width = 50, 30, 130, 420
+    labels = [s for s in SEVERITIES if counts.get(s, 0) > 0] or list(SEVERITIES)
+    chart.data = [[counts.get(s, 0) for s in labels]]
     chart.categoryAxis.categoryNames = labels
-    chart.categoryAxis.labels.angle = 20
-    chart.categoryAxis.labels.fontSize = 7
+    chart.categoryAxis.labels.angle = 0
+    chart.categoryAxis.labels.fontSize = 8
     chart.valueAxis.valueMin = 0
     chart.valueAxis.valueMax = max(1, max(counts.values(), default=0))
-    chart.valueAxis.valueStep = 1
-    chart.bars[0].fillColor = colors.HexColor("#4472c4")
+    chart.valueAxis.valueStep = max(1, max(counts.values(), default=1) // 5)
+    for i, sev in enumerate(labels):
+        chart.bars[0].fillColor = SEV_COLORS.get(sev, colors.HexColor("#4472c4"))
+        try:
+            chart.bars[(0, i)].fillColor = SEV_COLORS.get(sev, colors.HexColor("#4472c4"))
+        except Exception:
+            pass
     drawing.add(chart)
     return drawing
 
